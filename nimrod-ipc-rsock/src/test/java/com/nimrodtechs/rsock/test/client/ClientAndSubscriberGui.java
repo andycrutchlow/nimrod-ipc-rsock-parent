@@ -40,7 +40,7 @@ public class ClientAndSubscriberGui extends JDialog {
     ClientAndSubscriberGui instance;
 
     //final ThreadFactory threadFactory = new ThreadFactoryBuilder().setNameFormat("TradingEntityServiceImpl-%d").setUncaughtExceptionHandler(this).build();
-    ThreadPoolExecutor serviceThreads = (ThreadPoolExecutor) Executors.newFixedThreadPool(1);
+    ThreadPoolExecutor serviceThreads = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
 
     public ClientAndSubscriberGui() {
         initComponents();

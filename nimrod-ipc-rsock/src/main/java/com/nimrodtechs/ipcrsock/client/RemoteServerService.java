@@ -1,6 +1,7 @@
 package com.nimrodtechs.ipcrsock.client;
 
 import com.nimrodtechs.ipcrsock.common.NimrodRmiException;
+import io.rsocket.transport.netty.client.TcpClientTransport;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.pool2.BasePooledObjectFactory;
 import org.apache.commons.pool2.PooledObject;
@@ -164,7 +165,8 @@ public class RemoteServerService {
                         })
                 .rsocketStrategies(strategies)
                 .dataMimeType(new MimeType("application", "x-kryo"))
-                .tcp(remoteServerInfo.getHost(), remoteServerInfo.getPort());
+                .transport(TcpClientTransport.create(remoteServerInfo.getHost(), remoteServerInfo.getPort()));
+                //.tcp(remoteServerInfo.getHost(), remoteServerInfo.getPort());
     }
 
 

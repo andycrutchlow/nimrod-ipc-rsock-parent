@@ -1,7 +1,6 @@
 package com.nimrodtechs.ipcrsock.subscriber;
 
 import com.nimrodtechs.ipcrsock.common.*;
-import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -298,18 +297,6 @@ public class SubscriberService {
         }
     }
 
-//    private Disposable establishFlux(SubscriberConnectionInfo subscriberConnectionInfo, SubscriptionInfo subscriptionInfo) {
-//        RSocketRequester.RequestSpec requestSpec = subscriberConnectionInfo.getRSocketRequester().route(subscriberConnectionInfo.getName());
-//        //Disposable disposable = requestSpec.data(subscriptionInfo.originalSubscriptionRequest).retrieveFlux(subscriptionInfo.payloadClass)
-//        Disposable disposable = requestSpec.data(subscriptionInfo.originalSubscriptionRequest).retrieveFlux(PublisherPayload.class)
-//                .subscribe(
-//                        messagePayload ->{dispatchMessage(subscriberConnectionInfo,subscriptionInfo.subject,messagePayload);},
-//                        error -> {handleFluxError(subscriberConnectionInfo.getName(),subscriptionInfo.originalSubscriptionRequest,error);},
-//                        ()-> { displayCompletion(subscriberConnectionInfo.getName(), subscriptionInfo.originalSubscriptionRequest);}
-//                );
-//        return disposable;
-//    }
-
     private Disposable establishFlux(SubscriberConnectionInfo subscriberConnectionInfo, SubscriptionInfo subscriptionInfo) {
 
         RSocketRequester.RequestSpec requestSpec =
@@ -318,17 +305,17 @@ public class SubscriberService {
         Flux<PublisherPayload> flux = requestSpec
                 .data(subscriptionInfo.originalSubscriptionRequest)
                 .retrieveFlux(PublisherPayload.class)
-                // 🧠 Safety: if publisher is faster than consumer, only keep the latest message
+                // Safety: if publisher is faster than consumer, only keep the latest message
                 // (use onBackpressureBuffer(...) if you must not drop anything)
                 .onBackpressureLatest()
-                // 🧱 Prevent Reactor from flooding publisher with unbounded demand
+                // Prevent Reactor from flooding publisher with unbounded demand
                 .limitRate(256)
-                // ⚙️ Offload heavy work from Netty I/O threads
+                // Offload heavy work from Netty I/O threads
                 .publishOn(Schedulers.boundedElastic());
 
         Disposable disposable = flux.subscribe(
                 messagePayload -> {
-                    // ✅ Process message safely on your executor threads
+                    // Process message safely on your executor threads
                     dispatchMessage(subscriberConnectionInfo, subscriptionInfo.subject, messagePayload);
                 },
                 error -> {
