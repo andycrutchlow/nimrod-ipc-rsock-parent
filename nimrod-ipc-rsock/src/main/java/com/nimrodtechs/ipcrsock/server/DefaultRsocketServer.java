@@ -20,7 +20,6 @@ import reactor.core.publisher.Mono;
 import reactor.netty.tcp.TcpServer;
 
 import java.net.InetSocketAddress;
-
 @Configuration
 @Profile("!manualrsockserver")
 public class DefaultRsocketServer implements DisposableBean {

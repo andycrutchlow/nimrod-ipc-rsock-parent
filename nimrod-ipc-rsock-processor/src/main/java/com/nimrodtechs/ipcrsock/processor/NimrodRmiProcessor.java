@@ -1,12 +1,9 @@
 package com.nimrodtechs.ipcrsock.processor;
 
-import com.nimrodtechs.ipcrsock.annotations.NimrodRmi;
-import com.nimrodtechs.ipcrsock.annotations.NimrodRmiService;
+import com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface;
 import com.squareup.javapoet.*;
-import org.springframework.stereotype.Controller;
 import org.springframework.messaging.handler.annotation.MessageMapping;
-import reactor.core.publisher.Mono;
-import reactor.core.publisher.Flux;
+import org.springframework.stereotype.Controller;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -16,14 +13,15 @@ import javax.lang.model.util.Elements;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.Writer;
-import java.util.*;
-import java.util.concurrent.CompletionStage;
+import java.util.List;
+import java.util.Set;
+import java.util.StringJoiner;
 
 /**
- * Generates RSocket @Controller classes for any service annotated with @NimrodRmiService.
- * Each @NimrodRmi method becomes a @MessageMapping route handler.
+ * Generates both server-side @MessageMapping controllers and
+ * client-side proxy classes for @NimrodRmiInterface definitions.
  */
-@SupportedAnnotationTypes("com.nimrodtechs.ipcrsock.annotations.NimrodRmiService")
+@SupportedAnnotationTypes("com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface")
 //@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public class NimrodRmiProcessor extends AbstractProcessor {
 
@@ -33,226 +31,178 @@ public class NimrodRmiProcessor extends AbstractProcessor {
 
     @Override
     public synchronized void init(ProcessingEnvironment env) {
-        this.filer = env.getFiler();
-        this.messager = env.getMessager();
-        this.elements = env.getElementUtils();
+        filer = env.getFiler();
+        messager = env.getMessager();
+        elements = env.getElementUtils();
     }
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         if (annotations.isEmpty()) return false;
 
-        for (Element e : roundEnv.getElementsAnnotatedWith(NimrodRmiService.class)) {
-            if (!(e instanceof TypeElement serviceType)) continue;
-
-            NimrodRmiService serviceAnn = serviceType.getAnnotation(NimrodRmiService.class);
-            String prefix = (serviceAnn != null) ? serviceAnn.prefix() : "";
-
-            // Collect all @NimrodRmi methods
-            List<ExecutableElement> rmiMethods = new ArrayList<>();
-            for (Element enclosed : serviceType.getEnclosedElements()) {
-                if (enclosed.getKind() == ElementKind.METHOD &&
-                        enclosed.getAnnotation(NimrodRmi.class) != null) {
-                    rmiMethods.add((ExecutableElement) enclosed);
-                }
-            }
-
-            if (rmiMethods.isEmpty()) continue;
-
-            String pkg = elements.getPackageOf(serviceType).getQualifiedName().toString();
-            String simpleServiceName = serviceType.getSimpleName().toString();
-            String generatedName = simpleServiceName + "__NimrodRmiController";
-
+        for (Element iface : roundEnv.getElementsAnnotatedWith(NimrodRmiInterface.class)) {
+            if (!(iface instanceof TypeElement interfaceType)) continue;
             try {
-                TypeSpec controller = buildControllerType(serviceType, rmiMethods, prefix, generatedName);
-                JavaFile javaFile = JavaFile.builder(pkg, controller)
-                        .indent("    ")
-                        .build();
-
-                JavaFileObject jfo = filer.createSourceFile(pkg + "." + generatedName, serviceType);
-                try (Writer w = jfo.openWriter()) {
-                    javaFile.writeTo(w);
-                }
-
-                messager.printMessage(Diagnostic.Kind.NOTE,
-                        "Generated controller for @" + simpleServiceName + " → " + generatedName);
-
-            } catch (Exception ex) {
+                NimrodRmiInterface ann = interfaceType.getAnnotation(NimrodRmiInterface.class);
+                String serviceName = ann.serviceName();
+                generateServerController(interfaceType, serviceName);
+                generateClientProxy(interfaceType, serviceName);
+            } catch (Exception e) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
-                        "Failed to generate controller for " + simpleServiceName + ": " + ex.getMessage(), e);
+                        "Failed to process " + iface.getSimpleName() + ": " + e.getMessage(), iface);
             }
         }
         return true;
     }
 
-    /**
-     * Builds a @Controller class wrapping all @NimrodRmi methods of a given service.
-     */
-//    private TypeSpec buildControllerType(TypeElement serviceType,
-//                                         List<ExecutableElement> methods,
-//                                         String prefix,
-//                                         String generatedName) {
-//
-//        TypeSpec.Builder controllerBuilder = TypeSpec.classBuilder(generatedName)
-//                .addModifiers(Modifier.PUBLIC)
-//                .addAnnotation(Controller.class)
-//                .addField(TypeName.get(serviceType.asType()), "service", Modifier.PRIVATE, Modifier.FINAL);
-//
-//        // constructor
-//        MethodSpec ctor = MethodSpec.constructorBuilder()
-//                .addModifiers(Modifier.PUBLIC)
-//                .addParameter(TypeName.get(serviceType.asType()), "service")
-//                .addStatement("this.service = service")
-//                .build();
-//        controllerBuilder.addMethod(ctor);
-//
-//        String routeBase = (prefix == null || prefix.isEmpty()) ? "" : prefix + ".";
-//
-//        // create one handler method per @NimrodRmi
-//        for (ExecutableElement method : methods) {
-//            String methodName = method.getSimpleName().toString();
-//            List<? extends VariableElement> params = method.getParameters();
-//
-//            AnnotationSpec messageMapping = AnnotationSpec.builder(MessageMapping.class)
-//                    .addMember("value", "$S", routeBase + methodName)
-//                    .build();
-//
-//            CodeBlock.Builder body = CodeBlock.builder();
-//            body.addStatement("final Object[] args = (params == null ? new Object[0] : params)");
-//
-//            // cast parameters
-//            for (int i = 0; i < params.size(); i++) {
-//                TypeMirror tm = params.get(i).asType();
-//                body.addStatement("$T p$L = ($T) args[$L]", tm, i, tm, i);
-//            }
-//
-//            // build arg list for method call
-//            StringJoiner argList = new StringJoiner(", ");
-//            for (int i = 0; i < params.size(); i++) argList.add("p" + i);
-//
-//            body.add("\n// Invoke target method and normalize return type\n");
-//            body.addStatement("Object result = service.$L($L)", methodName, argList.toString());
-//
-//            // reactive normalization
-//            body.add("""
-//                if (result == null)
-//                    return reactor.core.publisher.Mono.empty();
-//                if (result instanceof reactor.core.publisher.Mono<?> mono)
-//                    return (reactor.core.publisher.Mono<Object>) mono;
-//                if (result instanceof reactor.core.publisher.Flux<?> flux)
-//                    return flux.collectList().map(r -> (Object) r);
-//                if (result instanceof java.util.concurrent.CompletionStage<?> cs)
-//                    return reactor.core.publisher.Mono.fromFuture(cs.toCompletableFuture());
-//                return reactor.core.publisher.Mono.just(result);
-//                """);
-//
-//            MethodSpec handler = MethodSpec.methodBuilder(methodName)
-//                    .addAnnotation(messageMapping)
-//                    .addModifiers(Modifier.PUBLIC)
-//                    .returns(ParameterizedTypeName.get(Mono.class, Object.class))
-//                    .addParameter(Object[].class, "params")
-//                    .addException(Exception.class)
-//                    .addCode(body.build())
-//                    .build();
-//
-//            controllerBuilder.addMethod(handler);
-//        }
-//
-//        return controllerBuilder.build();
-//    }
+    // --------------------------------------------------------------------------------------------
+    // SERVER SIDE CONTROLLER
+    // --------------------------------------------------------------------------------------------
+    private void generateServerController(TypeElement iface, String prefix) throws Exception {
+        String pkg = elements.getPackageOf(iface).getQualifiedName().toString();
+        String ifaceName = iface.getSimpleName().toString();
+        String generatedName = ifaceName + "__NimrodRmiController";
 
-    private TypeSpec buildControllerType(TypeElement serviceType,
-                                         List<ExecutableElement> methods,
-                                         String prefix,
-                                         String generatedName) {
-
-        TypeSpec.Builder controllerBuilder = TypeSpec.classBuilder(generatedName)
+        TypeSpec.Builder controller = TypeSpec.classBuilder(generatedName)
                 .addModifiers(Modifier.PUBLIC)
                 .addAnnotation(Controller.class)
-                .addField(TypeName.get(serviceType.asType()), "service", Modifier.PRIVATE, Modifier.FINAL);
+                .addAnnotation(AnnotationSpec.builder(
+                                ClassName.get("org.springframework.context.annotation", "Profile"))
+                        .addMember("value", "{$S,$S}", "nimrod-rmi-server","default")
+                        .build())
+                .addJavadoc("Auto-generated controller for $L", ifaceName);
 
-        // constructor
-        MethodSpec ctor = MethodSpec.constructorBuilder()
+        // The controller depends on an implementation of the interface
+        controller.addField(TypeName.get(iface.asType()), "service", Modifier.PRIVATE, Modifier.FINAL);
+        controller.addMethod(MethodSpec.constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(TypeName.get(serviceType.asType()), "service")
+                .addParameter(TypeName.get(iface.asType()), "service")
                 .addStatement("this.service = service")
-                .build();
-        controllerBuilder.addMethod(ctor);
+                .build());
 
         String routeBase = (prefix == null || prefix.isEmpty()) ? "" : prefix + ".";
 
-        // create one handler method per @NimrodRmi
-        for (ExecutableElement method : methods) {
-            String methodName = method.getSimpleName().toString();
-            List<? extends VariableElement> params = method.getParameters();
+        for (Element e : iface.getEnclosedElements()) {
+            if (e.getKind() != ElementKind.METHOD) continue;
+            ExecutableElement m = (ExecutableElement) e;
 
-            TypeMirror returnType = method.getReturnType();
-            String returnTypeStr = returnType.toString();
-
-            // Each @NimrodRmi method maps to @MessageMapping(route)
-            AnnotationSpec messageMapping = AnnotationSpec.builder(MessageMapping.class)
-                    .addMember("value", "$S", routeBase + methodName)
-                    .build();
-
-            CodeBlock.Builder body = CodeBlock.builder();
-            body.addStatement("final Object[] args = (params == null ? new Object[0] : params)");
-
-            // Cast each argument from Object[]
+            // Build argument unpacking
+            List<? extends VariableElement> params = m.getParameters();
+            CodeBlock.Builder code = CodeBlock.builder();
+            code.addStatement("final Object[] args = (params == null ? new Object[0] : params)");
             for (int i = 0; i < params.size(); i++) {
                 TypeMirror tm = params.get(i).asType();
-                body.addStatement("$T p$L = ($T) args[$L]", tm, i, tm, i);
+                code.addStatement("$T p$L = ($T) args[$L]", tm, i, tm, i);
             }
 
-            // Build comma-separated argument list
-            StringJoiner argList = new StringJoiner(", ");
-            for (int i = 0; i < params.size(); i++) argList.add("p" + i);
+            StringJoiner callArgs = new StringJoiner(", ");
+            for (int i = 0; i < params.size(); i++) callArgs.add("p" + i);
 
-            // ---- Generate method body logic based on return type ----
-            body.add("\n// Invoke target method and normalize to Mono<T>\n");
+            //String route = routeBase + m.getSimpleName().toString();
+            String route = m.getSimpleName().toString();
+            TypeMirror returnType = m.getReturnType();
 
-            if (returnTypeStr.equals("void")) {
-                // Fire-and-forget
-                body.addStatement("service.$L($L)", methodName, argList.toString());
-                body.addStatement("return reactor.core.publisher.Mono.empty()");
-            }
-//            else if (returnTypeStr.startsWith("reactor.core.publisher.Mono")) {
-//                // Already a Mono
-//                body.addStatement("return service.$L($L)", methodName, argList.toString());
-//            }
-//            else if (returnTypeStr.startsWith("reactor.core.publisher.Flux")) {
-//                // Convert Flux → Mono<List<T>>
-//                body.addStatement("return service.$L($L).collectList()", methodName, argList.toString());
-//            }
-//            else if (returnTypeStr.startsWith("java.util.concurrent.CompletionStage")) {
-//                // Async type
-//                body.addStatement(
-//                        "return reactor.core.publisher.Mono.fromFuture(service.$L($L).toCompletableFuture())",
-//                        methodName, argList.toString());
-//            }
-            else {
-                // Synchronous (e.g. String, AClass, List<AClass>, etc.)
-                body.addStatement("$T result = service.$L($L)", returnType, methodName, argList.toString());
-                body.addStatement("return reactor.core.publisher.Mono.justOrEmpty(result)");
+            // Generate call and return mapping
+            if (returnType.toString().equals("void")) {
+                code.addStatement("service.$L($L)", m.getSimpleName(), callArgs);
+                code.addStatement("return reactor.core.publisher.Mono.empty()");
+            } else {
+                code.addStatement("$T result = service.$L($L)", returnType, m.getSimpleName(), callArgs);
+                code.addStatement("return reactor.core.publisher.Mono.justOrEmpty(result)");
             }
 
-            // ---- Declare handler method signature ----
-            TypeName monoReturn = ParameterizedTypeName.get(
-                    ClassName.get("reactor.core.publisher", "Mono"), TypeName.get(returnType));
-
-            MethodSpec handler = MethodSpec.methodBuilder(methodName)
-                    .addAnnotation(messageMapping)
+            controller.addMethod(MethodSpec.methodBuilder(m.getSimpleName().toString())
+                    .addAnnotation(AnnotationSpec.builder(MessageMapping.class)
+                            .addMember("value", "$S", route).build())
                     .addModifiers(Modifier.PUBLIC)
-                    .returns(monoReturn)
+                    .returns(ParameterizedTypeName.get(
+                            ClassName.get("reactor.core.publisher", "Mono"),
+                            ClassName.get(Object.class)))
                     .addParameter(Object[].class, "params")
                     .addException(Exception.class)
-                    .addCode(body.build())
-                    .build();
-
-            controllerBuilder.addMethod(handler);
+                    .addCode(code.build())
+                    .build());
         }
 
-        return controllerBuilder.build();
+        JavaFile javaFile = JavaFile.builder(pkg, controller.build())
+                .indent("    ")
+                .build();
+
+        JavaFileObject jfo = filer.createSourceFile(pkg + "." + generatedName, iface);
+        try (Writer w = jfo.openWriter()) {
+            javaFile.writeTo(w);
+        }
     }
 
+    // --------------------------------------------------------------------------------------------
+    // CLIENT SIDE PROXY
+    // --------------------------------------------------------------------------------------------
+    private void generateClientProxy(TypeElement iface, String prefix) throws Exception {
+        String pkg = elements.getPackageOf(iface).getQualifiedName().toString();
+        String ifaceName = iface.getSimpleName().toString();
+        String generatedName = ifaceName + "__NimrodRmiClient";
 
+        TypeSpec.Builder proxy = TypeSpec.classBuilder(generatedName)
+                .addModifiers(Modifier.PUBLIC)
+                .addSuperinterface(TypeName.get(iface.asType()))
+                .addJavadoc("Auto-generated RMI client proxy for $L", ifaceName)
+                .addAnnotation(ClassName.get("org.springframework.stereotype", "Service"))
+                .addAnnotation(AnnotationSpec.builder(
+                                ClassName.get("org.springframework.context.annotation", "Profile"))
+                        .addMember("value", "{$S,$S}", "nimrod-rmi-client","default")
+                        .build())
+                .addField(ClassName.get("com.nimrodtechs.ipcrsock.client", "RemoteServerService"),
+                        "remoteServerService", Modifier.PRIVATE, Modifier.FINAL);
+
+        // Hard-code serviceName from the annotation
+        proxy.addField(FieldSpec.builder(String.class, "serviceName", Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("$S", prefix)
+                .build());
+
+        proxy.addMethod(MethodSpec.constructorBuilder()
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(ClassName.get("com.nimrodtechs.ipcrsock.client", "RemoteServerService"), "remoteServerService")
+                .addStatement("this.remoteServerService = remoteServerService")
+                .build());
+
+        for (Element e : iface.getEnclosedElements()) {
+            if (e.getKind() != ElementKind.METHOD) continue;
+            ExecutableElement m = (ExecutableElement) e;
+            List<? extends VariableElement> params = m.getParameters();
+            TypeMirror returnType = m.getReturnType();
+
+            CodeBlock.Builder body = CodeBlock.builder();
+            StringJoiner paramNames = new StringJoiner(", ");
+            for (VariableElement p : params) paramNames.add(p.getSimpleName().toString());
+
+            if (returnType.toString().equals("void")) {
+                body.addStatement("remoteServerService.fireAndForget(serviceName, $S, $L)",
+                        m.getSimpleName(), paramNames);
+            } else {
+                body.addStatement("return remoteServerService.executeRmiMethod($T.class, serviceName, $S, $L)",
+                        returnType, m.getSimpleName(), paramNames);
+            }
+
+            proxy.addMethod(MethodSpec.methodBuilder(m.getSimpleName().toString())
+                    .addModifiers(Modifier.PUBLIC)
+                    .addAnnotation(Override.class)
+                    .returns(TypeName.get(returnType))
+                    .addParameters(
+                            params.stream().map(p ->
+                                    ParameterSpec.builder(TypeName.get(p.asType()), p.getSimpleName().toString()).build()
+                            ).toList())
+                    .addException(Exception.class)
+                    .addCode(body.build())
+                    .build());
+        }
+
+        JavaFile javaFile = JavaFile.builder(pkg, proxy.build())
+                .indent("    ")
+                .build();
+
+        JavaFileObject jfo = filer.createSourceFile(pkg + "." + generatedName, iface);
+        try (Writer w = jfo.openWriter()) {
+            javaFile.writeTo(w);
+        }
+    }
 }

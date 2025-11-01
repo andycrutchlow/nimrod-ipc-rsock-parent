@@ -7,6 +7,7 @@ import com.nimrodtechs.ipcrsock.client.RemoteServerService;
 import com.nimrodtechs.ipcrsock.common.MessageReceiverInterface;
 import com.nimrodtechs.ipcrsock.common.NimrodPubSubException;
 import com.nimrodtechs.ipcrsock.subscriber.SubscriberService;
+import com.nimrodtechs.rsock.test.common.ServerRmiInterface;
 import com.nimrodtechs.rsock.test.model.MarketData;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocatorMetric;
@@ -36,6 +37,9 @@ public class ClientAndSubscriberGui extends JDialog {
 
     @Autowired
     RemoteServerService remoteServerService;
+
+    @Autowired
+    ServerRmiInterface serverRmiInterface;
 
     ClientAndSubscriberGui instance;
 
@@ -293,34 +297,29 @@ public class ClientAndSubscriberGui extends JDialog {
                     }
                 });
 
-//                Thread thread = new Thread(() -> {
-//                    try {
-//                        String response = "";
-//                        String[] params = txtParams.getText().split(",");
-//                        if (params.length == 0) {
-//                            response = remoteServerService.executeRmiMethod(String.class, txtServerName.getText(), txtMethod.getText());
-//                        } else if (params.length == 1) {
-//                            response = remoteServerService.executeRmiMethod(String.class, txtServerName.getText(), txtMethod.getText(), params[0]);
-//                        } else if (params.length == 2) {
-//                            response = remoteServerService.executeRmiMethod(String.class, txtServerName.getText(), txtMethod.getText(), params[0], params[1]);
-//                        } else if (params.length == 3) {
-//                            response = remoteServerService.executeRmiMethod(String.class, txtServerName.getText(), txtMethod.getText(), params[0], params[1], params[2]);
-//                        } else if (params.length == 4) {
-//                            response = remoteServerService.executeRmiMethod(String.class, txtServerName.getText(), txtMethod.getText(), params[0], params[1], params[2], params[3]);
-//                        }
-//                        String finalResponse = response;
-//                        SwingUtilities.invokeLater(() -> {
-//                            txtAreaResponse.append(finalResponse + "\n");
-//                        });
-//
-//                    } catch (Exception ex) {
-//                        log.error("Exception calling ", ex);
-//                    }
-//                });
-//                thread.start();
+
             }
         });
 
+        btnSubmit3.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                serviceThreads.execute(() -> {
+                    try {
+                        String response = serverRmiInterface.testServerRmi("testing proxy");
+                        String finalResponse = response;
+                        SwingUtilities.invokeLater(() -> {
+                            txtAreaResponse2.append(finalResponse + "\n");
+                        });
+
+                    } catch (Exception ex) {
+                        log.error("Exception calling ", ex);
+                    }
+                });
+
+
+            }
+        });
     }
 
     private void onOK() {
@@ -445,6 +444,16 @@ public class ClientAndSubscriberGui extends JDialog {
         var panel16 = new JPanel();
         var scrollPane3 = new JScrollPane();
         txtFastSubscribeLog = new JTextArea();
+        var panel17 = new JPanel();
+        var panel18 = new JPanel();
+        var label13 = new JLabel();
+        var label14 = new JLabel();
+        var label15 = new JLabel();
+        txtServerName3 = new JTextField();
+        txtMethod3 = new JTextField();
+        txtParams3 = new JTextField();
+        btnSubmit3 = new JButton();
+        txtAreaResponse3 = new JTextArea();
 
         //======== contentPane ========
         {
@@ -960,6 +969,77 @@ public class ClientAndSubscriberGui extends JDialog {
                         panel14.add(panel16, BorderLayout.CENTER);
                     }
                     tabbedPane1.addTab("FastSubscriber", panel14);
+
+                    //======== panel17 ========
+                    {
+                        panel17.setLayout(new BorderLayout());
+
+                        //======== panel18 ========
+                        {
+                            panel18.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
+
+                            //---- label13 ----
+                            label13.setText("ServerName");
+                            panel18.add(label13, new GridConstraints(0, 0, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- label14 ----
+                            label14.setText("Method");
+                            panel18.add(label14, new GridConstraints(1, 0, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- label15 ----
+                            label15.setText("Parameters");
+                            panel18.add(label15, new GridConstraints(2, 0, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- txtServerName3 ----
+                            txtServerName3.setText("server1");
+                            panel18.add(txtServerName3, new GridConstraints(0, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- txtMethod3 ----
+                            txtMethod3.setText("getMarketData1");
+                            panel18.add(txtMethod3, new GridConstraints(1, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+                            panel18.add(txtParams3, new GridConstraints(2, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- btnSubmit3 ----
+                            btnSubmit3.setText("Submit");
+                            btnSubmit3.addActionListener(e -> btnSubmit2(e));
+                            panel18.add(btnSubmit3, new GridConstraints(3, 0, 1, 1,
+                                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+                            panel18.add(txtAreaResponse3, new GridConstraints(3, 1, 1, 1,
+                                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                null, new Dimension(150, 50), null));
+                        }
+                        panel17.add(panel18, BorderLayout.NORTH);
+                    }
+                    tabbedPane1.addTab("RMI via Proxy", panel17);
                 }
                 panel3.add(tabbedPane1, new GridConstraints(0, 0, 1, 1,
                     GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -1017,5 +1097,10 @@ public class ClientAndSubscriberGui extends JDialog {
     private JButton btnShowMetrics;
     private JCheckBox chkShowMsgs;
     private JTextArea txtFastSubscribeLog;
+    private JTextField txtServerName3;
+    private JTextField txtMethod3;
+    private JTextField txtParams3;
+    private JButton btnSubmit3;
+    private JTextArea txtAreaResponse3;
     // JFormDesigner - End of variables declaration  //GEN-END:variables  @formatter:on
 }
