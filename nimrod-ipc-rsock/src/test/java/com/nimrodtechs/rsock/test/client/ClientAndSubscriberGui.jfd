@@ -727,7 +727,7 @@ new FormModel {
 							}
 							add( new FormComponent( "javax.swing.JLabel" ) {
 								name: "label13"
-								"text": "ServerName"
+								"text": "Rmi Interface"
 								auxiliary() {
 									"JavaCodeGenerator.variableLocal": true
 								}
@@ -762,7 +762,7 @@ new FormModel {
 							} )
 							add( new FormComponent( "javax.swing.JTextField" ) {
 								name: "txtServerName3"
-								"text": "server1"
+								"text": "MarketDataRmiInterface"
 							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
 								"column": 1
 								"anchor": 8
@@ -773,7 +773,7 @@ new FormModel {
 							} )
 							add( new FormComponent( "javax.swing.JTextField" ) {
 								name: "txtMethod3"
-								"text": "getMarketData1"
+								"text": "getMarketData"
 							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
 								"column": 1
 								"row": 1
@@ -818,6 +818,110 @@ new FormModel {
 						} )
 					}, new FormLayoutConstraints( null ) {
 						"title": "RMI via Proxy"
+					} )
+					add( new FormContainer( "javax.swing.JPanel", new FormLayoutManager( class java.awt.BorderLayout ) ) {
+						name: "panel19"
+						"preferredSize": new java.awt.Dimension( 400, 167 )
+						auxiliary() {
+							"JavaCodeGenerator.variableLocal": true
+						}
+						add( new FormContainer( "javax.swing.JPanel", new FormLayoutManager( class com.intellij.uiDesigner.core.GridLayoutManager ) {
+							"$columnCount": 2
+							"$rowCount": 4
+						} ) {
+							name: "panel20"
+							auxiliary() {
+								"JavaCodeGenerator.variableLocal": true
+							}
+							add( new FormComponent( "javax.swing.JLabel" ) {
+								name: "label16"
+								"text": "Rmi Interface"
+								auxiliary() {
+									"JavaCodeGenerator.variableLocal": true
+								}
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"anchor": 8
+								"hSizePolicy": 0
+								"vSizePolicy": 0
+							} )
+							add( new FormComponent( "javax.swing.JComboBox" ) {
+								name: "cmbInterfaces"
+								"preferredSize": new java.awt.Dimension( 300, 34 )
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"column": 1
+								"anchor": 8
+							} )
+							add( new FormComponent( "javax.swing.JLabel" ) {
+								name: "label17"
+								"text": "Method"
+								auxiliary() {
+									"JavaCodeGenerator.variableLocal": true
+								}
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"row": 1
+								"anchor": 8
+								"hSizePolicy": 0
+								"vSizePolicy": 0
+							} )
+							add( new FormComponent( "javax.swing.JLabel" ) {
+								name: "label18"
+								"text": "Parameters"
+								auxiliary() {
+									"JavaCodeGenerator.variableLocal": true
+								}
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"row": 2
+								"anchor": 8
+								"hSizePolicy": 0
+								"vSizePolicy": 0
+							} )
+							add( new FormComponent( "javax.swing.JTextField" ) {
+								name: "txtMethod4"
+								"text": "getMarketData"
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"column": 1
+								"row": 1
+								"anchor": 8
+								"fill": 1
+								"hSizePolicy": 6
+								"vSizePolicy": 0
+								"preferredSize": #Dimension3
+							} )
+							add( new FormComponent( "javax.swing.JTextField" ) {
+								name: "txtParams4"
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"column": 1
+								"row": 2
+								"anchor": 8
+								"fill": 1
+								"hSizePolicy": 6
+								"vSizePolicy": 0
+								"preferredSize": #Dimension4
+							} )
+							add( new FormComponent( "javax.swing.JButton" ) {
+								name: "btnSubmit4"
+								"text": "Submit"
+								addEvent( new FormEvent( "java.awt.event.ActionListener", "actionPerformed", "btnSubmit2", true ) )
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"row": 3
+								"fill": 1
+								"vSizePolicy": 0
+							} )
+							add( new FormComponent( "javax.swing.JTextArea" ) {
+								name: "txtAreaResponse4"
+							}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
+								"column": 1
+								"row": 3
+								"fill": 3
+								"hSizePolicy": 6
+								"vSizePolicy": 6
+								"preferredSize": #Dimension5
+							} )
+						}, new FormLayoutConstraints( class java.lang.String ) {
+							"value": "North"
+						} )
+					}, new FormLayoutConstraints( null ) {
+						"title": "Dynamic RMI"
 					} )
 				}, new FormLayoutConstraints( class com.intellij.uiDesigner.core.GridConstraints ) {
 					"fill": 3

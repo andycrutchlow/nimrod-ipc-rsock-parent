@@ -7,6 +7,7 @@ import com.nimrodtechs.ipcrsock.client.RemoteServerService;
 import com.nimrodtechs.ipcrsock.common.MessageReceiverInterface;
 import com.nimrodtechs.ipcrsock.common.NimrodPubSubException;
 import com.nimrodtechs.ipcrsock.subscriber.SubscriberService;
+import com.nimrodtechs.rsock.test.common.MarketDataRmiInterface;
 import com.nimrodtechs.rsock.test.common.ServerRmiInterface;
 import com.nimrodtechs.rsock.test.model.MarketData;
 import io.netty.buffer.PooledByteBufAllocator;
@@ -17,11 +18,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
+import org.springframework.core.type.filter.AnnotationTypeFilter;
 import org.springframework.stereotype.Component;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -39,7 +44,7 @@ public class ClientAndSubscriberGui extends JDialog {
     RemoteServerService remoteServerService;
 
     @Autowired
-    ServerRmiInterface serverRmiInterface;
+    MarketDataRmiInterface marketDataRmiInterface;
 
     ClientAndSubscriberGui instance;
 
@@ -49,7 +54,41 @@ public class ClientAndSubscriberGui extends JDialog {
     public ClientAndSubscriberGui() {
         initComponents();
         instance = this;
+
+        Set<Class<?>> rmiInterfaces =
+                findAnnotatedInterfaces("com.nimrodtechs.rsock.test.common");
+
+        rmiInterfaces.forEach(cls -> cmbInterfaces.addItem(cls.getSimpleName()));
+
     }
+
+    public static Set<Class<?>> findAnnotatedInterfaces(String... basePackages) {
+        try {
+            // Disable default @Component filtering
+            ClassPathScanningCandidateComponentProvider scanner =
+                    new ClassPathScanningCandidateComponentProvider(false);
+
+            // Add filter for your annotation
+            scanner.addIncludeFilter(new AnnotationTypeFilter(com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface.class));
+
+            Set<Class<?>> result = new java.util.HashSet<>();
+            for (String base : basePackages) {
+                scanner.findCandidateComponents(base).forEach(bd -> {
+                    try {
+                        Class<?> cls = Class.forName(bd.getBeanClassName());
+                        result.add(cls);
+                    } catch (ClassNotFoundException e) {
+                        e.printStackTrace();
+                    }
+                });
+            }
+            return result;
+        } catch (Exception e) {
+            throw new RuntimeException("Error scanning for @NimrodRmiInterface classes", e);
+        }
+    }
+
+
 
     class SubscriberPanel1 implements MessageReceiverInterface {
         @Override
@@ -306,10 +345,10 @@ public class ClientAndSubscriberGui extends JDialog {
             public void actionPerformed(ActionEvent e) {
                 serviceThreads.execute(() -> {
                     try {
-                        String response = serverRmiInterface.testServerRmi("testing proxy");
-                        String finalResponse = response;
+                        MarketData response = marketDataRmiInterface.getMarketData(txtParams3.getText());
+                        MarketData finalResponse = response;
                         SwingUtilities.invokeLater(() -> {
-                            txtAreaResponse2.append(finalResponse + "\n");
+                            txtAreaResponse3.append(finalResponse.toString() + "\n");
                         });
 
                     } catch (Exception ex) {
@@ -454,6 +493,16 @@ public class ClientAndSubscriberGui extends JDialog {
         txtParams3 = new JTextField();
         btnSubmit3 = new JButton();
         txtAreaResponse3 = new JTextArea();
+        var panel19 = new JPanel();
+        var panel20 = new JPanel();
+        var label16 = new JLabel();
+        cmbInterfaces = new JComboBox();
+        var label17 = new JLabel();
+        var label18 = new JLabel();
+        txtMethod4 = new JTextField();
+        txtParams4 = new JTextField();
+        btnSubmit4 = new JButton();
+        txtAreaResponse4 = new JTextArea();
 
         //======== contentPane ========
         {
@@ -979,7 +1028,7 @@ public class ClientAndSubscriberGui extends JDialog {
                             panel18.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
 
                             //---- label13 ----
-                            label13.setText("ServerName");
+                            label13.setText("Rmi Interface");
                             panel18.add(label13, new GridConstraints(0, 0, 1, 1,
                                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                                 GridConstraints.SIZEPOLICY_FIXED,
@@ -1003,7 +1052,7 @@ public class ClientAndSubscriberGui extends JDialog {
                                 null, null, null));
 
                             //---- txtServerName3 ----
-                            txtServerName3.setText("server1");
+                            txtServerName3.setText("MarketDataRmiInterface");
                             panel18.add(txtServerName3, new GridConstraints(0, 1, 1, 1,
                                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                                 GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
@@ -1011,7 +1060,7 @@ public class ClientAndSubscriberGui extends JDialog {
                                 null, null, null));
 
                             //---- txtMethod3 ----
-                            txtMethod3.setText("getMarketData1");
+                            txtMethod3.setText("getMarketData");
                             panel18.add(txtMethod3, new GridConstraints(1, 1, 1, 1,
                                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                                 GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
@@ -1040,6 +1089,78 @@ public class ClientAndSubscriberGui extends JDialog {
                         panel17.add(panel18, BorderLayout.NORTH);
                     }
                     tabbedPane1.addTab("RMI via Proxy", panel17);
+
+                    //======== panel19 ========
+                    {
+                        panel19.setPreferredSize(new Dimension(400, 167));
+                        panel19.setLayout(new BorderLayout());
+
+                        //======== panel20 ========
+                        {
+                            panel20.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
+
+                            //---- label16 ----
+                            label16.setText("Rmi Interface");
+                            panel20.add(label16, new GridConstraints(0, 0, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- cmbInterfaces ----
+                            cmbInterfaces.setPreferredSize(new Dimension(300, 34));
+                            panel20.add(cmbInterfaces, new GridConstraints(0, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                                null, null, null));
+
+                            //---- label17 ----
+                            label17.setText("Method");
+                            panel20.add(label17, new GridConstraints(1, 0, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- label18 ----
+                            label18.setText("Parameters");
+                            panel20.add(label18, new GridConstraints(2, 0, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- txtMethod4 ----
+                            txtMethod4.setText("getMarketData");
+                            panel20.add(txtMethod4, new GridConstraints(1, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+                            panel20.add(txtParams4, new GridConstraints(2, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+
+                            //---- btnSubmit4 ----
+                            btnSubmit4.setText("Submit");
+                            btnSubmit4.addActionListener(e -> btnSubmit2(e));
+                            panel20.add(btnSubmit4, new GridConstraints(3, 0, 1, 1,
+                                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                                GridConstraints.SIZEPOLICY_FIXED,
+                                null, null, null));
+                            panel20.add(txtAreaResponse4, new GridConstraints(3, 1, 1, 1,
+                                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                                null, new Dimension(150, 50), null));
+                        }
+                        panel19.add(panel20, BorderLayout.NORTH);
+                    }
+                    tabbedPane1.addTab("Dynamic RMI", panel19);
                 }
                 panel3.add(tabbedPane1, new GridConstraints(0, 0, 1, 1,
                     GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -1102,5 +1223,10 @@ public class ClientAndSubscriberGui extends JDialog {
     private JTextField txtParams3;
     private JButton btnSubmit3;
     private JTextArea txtAreaResponse3;
+    private JComboBox cmbInterfaces;
+    private JTextField txtMethod4;
+    private JTextField txtParams4;
+    private JButton btnSubmit4;
+    private JTextArea txtAreaResponse4;
     // JFormDesigner - End of variables declaration  //GEN-END:variables  @formatter:on
 }
