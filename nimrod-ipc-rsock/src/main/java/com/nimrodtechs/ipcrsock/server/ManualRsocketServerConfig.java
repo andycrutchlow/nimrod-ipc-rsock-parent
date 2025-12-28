@@ -12,7 +12,7 @@ import org.springframework.messaging.rsocket.annotation.support.RSocketMessageHa
  * It is enabled by setting spring profile manualrsockserver.
  */
 @Configuration
-@Profile("manualrsockserver & !gui")
+@Profile("manualrsockserver")
 public class ManualRsocketServerConfig {
     @Bean
     ManualRsocketServer ManualRsocketServerFactory(RSocketStrategies rSocketStrategies, RSocketMessageHandler messageHandler) {

@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.rsocket.annotation.support.RSocketMessageHandler;
 
 @Configuration
-@Profile("!manualrsockserver")
+@Profile("!manualrsockserver & !nimrod-rmi-client")
 public class DefaultRsocketServerConfig {
 
     @Bean

@@ -19,6 +19,7 @@ import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import java.awt.*;
 import java.awt.event.*;
+import java.math.BigDecimal;
 import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -115,7 +116,7 @@ public class ServerAndPublisherGui extends JDialog implements SubscriptionListen
                     startLoopingThread();
                 } else {
                     //publisherSocket.publish(txtSubject.getText(), new MarketData(txtData.getText(), random.nextInt(BOUND)));
-                    publisherSocket.publish(txtSubject.getText(), new MarketData(txtData.getText(), atomicInteger.incrementAndGet()));
+                    publisherSocket.publish(txtSubject.getText(), new MarketData(txtData.getText(), atomicInteger.incrementAndGet(), BigDecimal.ONE));
                 }
             }
         });

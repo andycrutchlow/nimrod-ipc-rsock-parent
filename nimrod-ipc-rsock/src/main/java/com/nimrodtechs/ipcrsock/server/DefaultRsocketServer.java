@@ -6,23 +6,18 @@ import io.rsocket.transport.netty.server.TcpServerTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
-import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.messaging.rsocket.annotation.support.RSocketMessageHandler;
-import reactor.core.publisher.Mono;
 import reactor.netty.tcp.TcpServer;
 
 import java.net.InetSocketAddress;
-
 @Configuration
-@Profile("!manualrsockserver")
+//@Profile("!manualrsockserver")
+@Profile("!manualrsockserver & !nimrod-rmi-client")
 public class DefaultRsocketServer implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultRsocketServer.class);
