@@ -8,17 +8,14 @@ import com.nimrodtechs.ipcrsock.common.MessageReceiverInterface;
 import com.nimrodtechs.ipcrsock.common.NimrodPubSubException;
 import com.nimrodtechs.ipcrsock.subscriber.SubscriberService;
 import com.nimrodtechs.rsock.test.common.MarketDataRmiInterface;
-import com.nimrodtechs.rsock.test.common.ServerRmiInterface;
 import com.nimrodtechs.rsock.test.model.MarketData;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocatorMetric;
 import jakarta.annotation.PostConstruct;
-import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AnnotationTypeFilter;
 import org.springframework.stereotype.Component;
@@ -26,6 +23,8 @@ import org.springframework.stereotype.Component;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -54,12 +53,41 @@ public class ClientAndSubscriberGui extends JDialog {
     public ClientAndSubscriberGui() {
         initComponents();
         instance = this;
+        cmbInterfaces.setModel(new ClassComboBoxModel(new ArrayList<>()));
+        cmbInterfaces.setRenderer(new ClassListCellRenderer());
 
         Set<Class<?>> rmiInterfaces =
                 findAnnotatedInterfaces("com.nimrodtechs.rsock.test.common");
 
-        rmiInterfaces.forEach(cls -> cmbInterfaces.addItem(cls.getSimpleName()));
+        rmiInterfaces.forEach(cls -> cmbInterfaces.addItem(cls));
 
+    }
+
+    public class ClassComboBoxModel extends DefaultComboBoxModel<Class<?>> {
+
+        public ClassComboBoxModel(java.util.List<Class<?>> classes) {
+            super(classes.toArray(new Class[0]));
+        }
+
+        @Override
+        public Class<?> getSelectedItem() {
+            return (Class<?>) super.getSelectedItem();
+        }
+    }
+
+    public class ClassListCellRenderer extends DefaultListCellRenderer {
+
+        @Override
+        public java.awt.Component getListCellRendererComponent(
+                JList<?> list, Object value, int index,
+                boolean isSelected, boolean cellHasFocus) {
+
+            if (value instanceof Class<?> clazz) {
+                value = clazz.getSimpleName();  // <- what gets shown
+            }
+
+            return super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+        }
     }
 
     public static Set<Class<?>> findAnnotatedInterfaces(String... basePackages) {
@@ -69,7 +97,7 @@ public class ClientAndSubscriberGui extends JDialog {
                     new ClassPathScanningCandidateComponentProvider(false);
 
             // Add filter for your annotation
-            scanner.addIncludeFilter(new AnnotationTypeFilter(com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface.class));
+            scanner.addIncludeFilter(new AnnotationTypeFilter(com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface.class,true,true));
 
             Set<Class<?>> result = new java.util.HashSet<>();
             for (String base : basePackages) {
@@ -350,7 +378,7 @@ public class ClientAndSubscriberGui extends JDialog {
                         SwingUtilities.invokeLater(() -> {
                             txtAreaResponse3.append(finalResponse.toString() + "\n");
                         });
-
+                        marketDataRmiInterface.receiveMarketData("111","222","3333");
                     } catch (Exception ex) {
                         log.error("Exception calling ", ex);
                     }
@@ -394,6 +422,21 @@ public class ClientAndSubscriberGui extends JDialog {
 
     private void btnFastSubscribe(ActionEvent e) {
         // TODO add your code here
+    }
+
+    private void cmbInterfacesItemStateChanged(ItemEvent e) {
+        cmbMethods.removeAllItems();
+        if(e.getStateChange()==1){
+
+            Class<?> clazz = (Class)e.getItem();
+            // Get all public methods, including inherited ones
+            Method[] methods = clazz.getMethods();
+            for (Method method : methods) {
+                cmbMethods.addItem(method.getName());
+            }
+        } else {
+            cmbMethods.addItem("No Methods");
+        }
     }
 
 //    @Override
@@ -498,8 +541,8 @@ public class ClientAndSubscriberGui extends JDialog {
         var label16 = new JLabel();
         cmbInterfaces = new JComboBox();
         var label17 = new JLabel();
+        cmbMethods = new JComboBox();
         var label18 = new JLabel();
-        txtMethod4 = new JTextField();
         txtParams4 = new JTextField();
         btnSubmit4 = new JButton();
         txtAreaResponse4 = new JTextArea();
@@ -1097,7 +1140,7 @@ public class ClientAndSubscriberGui extends JDialog {
 
                         //======== panel20 ========
                         {
-                            panel20.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
+                            panel20.setLayout(new GridLayoutManager(5, 2, new Insets(0, 0, 0, 0), -1, -1));
 
                             //---- label16 ----
                             label16.setText("Rmi Interface");
@@ -1109,6 +1152,7 @@ public class ClientAndSubscriberGui extends JDialog {
 
                             //---- cmbInterfaces ----
                             cmbInterfaces.setPreferredSize(new Dimension(300, 34));
+                            cmbInterfaces.addItemListener(e -> cmbInterfacesItemStateChanged(e));
                             panel20.add(cmbInterfaces, new GridConstraints(0, 1, 1, 1,
                                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -1123,19 +1167,19 @@ public class ClientAndSubscriberGui extends JDialog {
                                 GridConstraints.SIZEPOLICY_FIXED,
                                 null, null, null));
 
+                            //---- cmbMethods ----
+                            cmbMethods.setPreferredSize(new Dimension(300, 34));
+                            panel20.add(cmbMethods, new GridConstraints(1, 1, 1, 1,
+                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                                null, null, null));
+
                             //---- label18 ----
                             label18.setText("Parameters");
                             panel20.add(label18, new GridConstraints(2, 0, 1, 1,
                                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                                 GridConstraints.SIZEPOLICY_FIXED,
-                                GridConstraints.SIZEPOLICY_FIXED,
-                                null, null, null));
-
-                            //---- txtMethod4 ----
-                            txtMethod4.setText("getMarketData");
-                            panel20.add(txtMethod4, new GridConstraints(1, 1, 1, 1,
-                                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                                GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                                 GridConstraints.SIZEPOLICY_FIXED,
                                 null, null, null));
                             panel20.add(txtParams4, new GridConstraints(2, 1, 1, 1,
@@ -1224,7 +1268,7 @@ public class ClientAndSubscriberGui extends JDialog {
     private JButton btnSubmit3;
     private JTextArea txtAreaResponse3;
     private JComboBox cmbInterfaces;
-    private JTextField txtMethod4;
+    private JComboBox cmbMethods;
     private JTextField txtParams4;
     private JButton btnSubmit4;
     private JTextArea txtAreaResponse4;

@@ -42,4 +42,9 @@ public class MarketDataRmiMethods implements MarketDataRmiInterface {
         );
         return marketDataMap;
     }
+
+    @Override
+    public void receiveMarketData(String s1, String s2, String s3) {
+
+    }
 }

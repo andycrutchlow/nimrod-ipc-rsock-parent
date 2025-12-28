@@ -4,7 +4,7 @@ package com.nimrodtechs.ipcrsock.annotations;
 import java.lang.annotation.*;
 
 @Target(ElementType.TYPE)
-@Retention(RetentionPolicy.SOURCE)
+@Retention(RetentionPolicy.RUNTIME)
 public @interface NimrodRmiInterface {
     /**
      * Logical service name used for routing, e.g. "datamanager".

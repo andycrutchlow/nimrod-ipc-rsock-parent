@@ -1,5 +1,6 @@
 package com.nimrodtechs.rsock.test.common;
 
+import com.nimrodtechs.ipcrsock.annotations.NimrodFireAndForget;
 import com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface;
 import com.nimrodtechs.rsock.test.model.MarketData;
 import com.nimrodtechs.rsock.test.model.MarketDataRequest;
@@ -14,5 +15,8 @@ public interface MarketDataRmiInterface {
     public List<MarketData> getMarketDataList(int count) throws Exception;
 
     public Map<String,MarketData> getMarketDataMap(MarketDataRequest request) throws Exception;
+
+    @NimrodFireAndForget
+    public void receiveMarketData(String s1, String s2, String s3) throws Exception;
 
 }

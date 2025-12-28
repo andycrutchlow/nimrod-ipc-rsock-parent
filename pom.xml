@@ -33,4 +33,21 @@
         </repository>
     </distributionManagement>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                    <release>21</release>
+                    <testSource>21</testSource>
+                    <testTarget>21</testTarget>
+                    <testRelease>21</testRelease>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>
