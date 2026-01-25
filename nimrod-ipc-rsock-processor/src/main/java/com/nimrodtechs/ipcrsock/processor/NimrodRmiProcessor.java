@@ -213,7 +213,8 @@ public class NimrodRmiProcessor extends AbstractProcessor {
                 .addAnnotation(ClassName.get("org.springframework.stereotype", "Service"))
                 .addAnnotation(AnnotationSpec.builder(
                                 ClassName.get("org.springframework.context.annotation", "Profile"))
-                        .addMember("value", "{$S,$S}", "nimrod-rmi-client", "default")
+                        //.addMember("value", "{$S,$S}", "nimrod-rmi-client", "default")
+                        .addMember("value", "{$S}", "nimrod-rmi-client")
                         .build())
                 .addField(ClassName.get("com.nimrodtechs.ipcrsock.client", "RemoteServerService"),
                         "remoteServerService", Modifier.PRIVATE, Modifier.FINAL);

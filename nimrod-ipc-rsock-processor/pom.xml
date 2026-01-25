@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
     <modelVersion>4.0.0</modelVersion>
+
     <parent>
         <groupId>com.nimrodtechs</groupId>
         <artifactId>nimrod-ipc-rsock-parent</artifactId>
-        <version>3.1-SNAPSHOT</version>
+        <version>4.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>nimrod-ipc-rsock-processor</artifactId>
@@ -21,55 +24,69 @@
     </properties>
 
     <dependencies>
-        <!-- compile-time link to @NimrodRmi -->
+
+        <!-- Public annotations API -->
         <dependency>
             <groupId>com.nimrodtechs</groupId>
             <artifactId>nimrod-ipc-rsock-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
 
-        <!-- JavaPoet for generating source -->
+        <!-- Source generation -->
         <dependency>
             <groupId>com.squareup</groupId>
             <artifactId>javapoet</artifactId>
             <version>1.13.0</version>
         </dependency>
 
-        <!-- Provided only (not packaged into the processor JAR) -->
+        <!-- Processor runtime dependencies (self-contained) -->
+        <!-- These are needed by javac while running the processor -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
-            <scope>provided</scope>
         </dependency>
+
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-messaging</artifactId>
-            <scope>provided</scope>
         </dependency>
+
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-            <scope>provided</scope>
         </dependency>
+
     </dependencies>
+
     <build>
+
+        <!-- Ensure META-INF/services is included -->
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>false</filtering>
             </resource>
         </resources>
+
         <plugins>
+
+            <!-- Compile the processor itself, but do NOT run annotation processing here -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
-                    <proc>none</proc> <!-- disable annotation processing for the processor module -->
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <release>${java.version}</release>
+
+                    <!-- Critical: prevent recursive processor invocation -->
+                    <proc>none</proc>
+
+                    <!-- Explicitly empty: this module does not run processors -->
                     <annotationProcessorPaths/>
                 </configuration>
             </plugin>
+
         </plugins>
     </build>
 

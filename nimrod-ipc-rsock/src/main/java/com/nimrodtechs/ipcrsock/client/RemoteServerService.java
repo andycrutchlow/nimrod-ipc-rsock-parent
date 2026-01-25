@@ -2,7 +2,6 @@ package com.nimrodtechs.ipcrsock.client;
 
 import com.nimrodtechs.ipcrsock.common.NimrodRmiException;
 import io.rsocket.transport.netty.client.TcpClientTransport;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.pool2.BasePooledObjectFactory;
 import org.apache.commons.pool2.PooledObject;
 import org.apache.commons.pool2.impl.DefaultPooledObject;
@@ -11,6 +10,7 @@ import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.rsocket.RSocketRequester;
 import org.springframework.messaging.rsocket.RSocketStrategies;
 import org.springframework.stereotype.Service;
@@ -20,53 +20,59 @@ import reactor.util.retry.Retry;
 
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+@Profile({"nimrod-rmi-client","default"})
 @Service
 public class RemoteServerService {
     private static final Logger log = LoggerFactory.getLogger(RemoteServerService.class);
     @Autowired
     RSocketStrategies rSocketStrategies;
 
-    @Autowired
-    RemoteServerProperties remoteServerProperties;
+//    @Autowired
+//    RemoteServerProperties remoteServerProperties;
 
     boolean forwardingMode = false;
+    private final RemoteServerProperties remoteServerInfoMap ;
+
+    public RemoteServerService(RemoteServerProperties remoteServerInfoMap) {
+        this.remoteServerInfoMap = remoteServerInfoMap;
+    }
+
     public void setForwardingMode(boolean forwardingMode) {
         this.forwardingMode = forwardingMode;
     }
 
-
-    private Map<String, RemoteServerInfo> remoteServerInfoMap = new HashMap<>();
-
-
     @PostConstruct
     void init() throws Exception {
-        if(remoteServerProperties.getSetup() == null) {
-            //Quietly return and don't attempt to set up client side -> server connection pools
-            return;
+        //For each server found in remoteServerInfoMap set up a connection pool
+        for (RemoteServerInfo remoteServerInfo : remoteServerInfoMap.getServers().values()) {
+            remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
         }
-        for (String remoteServerInfoItems : remoteServerProperties.getSetup()) {
-            String[] items = remoteServerInfoItems.split(",");
-            RemoteServerInfo remoteServerInfo = new RemoteServerInfo(items[0], items[1], Integer.parseInt(items[2]), Integer.parseInt(items[3]));
-            //Optional extra settings
-            if (items.length > 4) {
-                //Set this with a large number if you expect to use debugger in server side with breakpoints
-                remoteServerInfo.setKeepAliveWaitTime(Integer.parseInt(items[4]));
-            }
-            if (items.length > 5) {
-                remoteServerInfo.setKeepAliveInterval(Integer.parseInt(items[5]));
-            }
-            if (items.length > 6) {
-                remoteServerInfo.setRetryMaxAttempts(Integer.parseInt(items[6]));
-            }
-            if (items.length > 7) {
-                remoteServerInfo.setRetryReconnectInterval(Integer.parseInt(items[7]));
-            }
-            addRemoteServer(remoteServerInfo);
-        }
+
+//        if(remoteServerProperties.getSetup() == null) {
+//            //Quietly return and don't attempt to set up client side -> server connection pools
+//            return;
+//        }
+//        for (String remoteServerInfoItems : remoteServerProperties.getSetup()) {
+//            String[] items = remoteServerInfoItems.split(",");
+//            RemoteServerInfo remoteServerInfo = new RemoteServerInfo(items[0], items[1], Integer.parseInt(items[2]), Integer.parseInt(items[3]));
+//            //Optional extra settings
+//            if (items.length > 4) {
+//                //Set this with a large number if you expect to use debugger in server side with breakpoints
+//                remoteServerInfo.setKeepAliveWaitTime(Integer.parseInt(items[4]));
+//            }
+//            if (items.length > 5) {
+//                remoteServerInfo.setKeepAliveInterval(Integer.parseInt(items[5]));
+//            }
+//            if (items.length > 6) {
+//                remoteServerInfo.setRetryMaxAttempts(Integer.parseInt(items[6]));
+//            }
+//            if (items.length > 7) {
+//                remoteServerInfo.setRetryReconnectInterval(Integer.parseInt(items[7]));
+//            }
+//            addRemoteServer(remoteServerInfo);
+//        }
     }
 
     /**
@@ -74,10 +80,10 @@ public class RemoteServerService {
      * @param remoteServerInfo
      * @throws Exception
      */
-    public void addRemoteServer(RemoteServerInfo remoteServerInfo) throws Exception {
-        remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
-        remoteServerInfoMap.put(remoteServerInfo.getName(), remoteServerInfo);
-    }
+//    public void addRemoteServer(RemoteServerInfo remoteServerInfo) throws Exception {
+//        remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
+//        remoteServerInfoMap.put(remoteServerInfo.getName(), remoteServerInfo);
+//    }
 
     private GenericObjectPool<RSocketRequester> getConnectPool(RemoteServerInfo remoteServerInfo) throws Exception {
         GenericObjectPoolConfig poolConfig = new GenericObjectPoolConfig();
@@ -171,7 +177,7 @@ public class RemoteServerService {
 
 
     public <T> T executeRmiMethod(Class<T> responseClass, String serviceName, String methodName, Object... parameters) throws Exception {
-        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.get(serviceName);
+        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.getServers().get(serviceName);
         if(remoteServerInfo == null) {
             throw new NimrodRmiException(serviceName+" is not a registered Remote Server");
         }
@@ -210,7 +216,7 @@ public class RemoteServerService {
     }
 
     public void fireAndForget(String serviceName, String methodName, Object... parameters) throws Exception {
-        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.get(serviceName);
+        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.getServers().get(serviceName);
         if(remoteServerInfo == null) {
             throw new NimrodRmiException(serviceName+" is not a registered Remote Server");
         }
@@ -244,6 +250,6 @@ public class RemoteServerService {
     }
 
     public boolean isServerConfigured(String serverName) {
-        return remoteServerInfoMap.get(serverName) != null;
+        return remoteServerInfoMap.getServers().get(serverName) != null;
     }
 }

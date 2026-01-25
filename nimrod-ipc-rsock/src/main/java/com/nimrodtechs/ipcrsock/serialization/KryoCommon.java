@@ -12,7 +12,7 @@ import com.esotericsoftware.kryo.kryo5.serializers.FieldSerializer;
 import com.esotericsoftware.kryo.kryo5.unsafe.UnsafeInput;
 import com.esotericsoftware.kryo.kryo5.unsafe.UnsafeOutput;
 import lombok.extern.slf4j.Slf4j;
-import org.hibernate.collection.spi.*;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -62,18 +62,18 @@ public class KryoCommon {
         //Look for application specific property identifying additional DTO classes that will also be serialized
 
 
-        try {
-            kryo.addDefaultSerializer(PersistentIdentifierBag.class, new FieldSerializer(kryo, PersistentIdentifierBag.class));
-            kryo.addDefaultSerializer(PersistentBag.class, new FieldSerializer(kryo, PersistentBag.class));
-            kryo.addDefaultSerializer(PersistentList.class, new FieldSerializer(kryo, PersistentList.class));
-            kryo.addDefaultSerializer(PersistentSet.class, new FieldSerializer(kryo, PersistentSet.class));
-            kryo.addDefaultSerializer(PersistentMap.class, new FieldSerializer(kryo, PersistentMap.class));
-            kryo.addDefaultSerializer(PersistentSortedMap.class, new FieldSerializer(kryo, PersistentSortedMap.class));
-            kryo.addDefaultSerializer(PersistentSortedSet.class, new FieldSerializer(kryo, PersistentSortedSet.class));
-        } catch (NoClassDefFoundError e) {
-            //Don't care ...just means hibernate entities containing collection classes can't be deserialized
-
-        }
+//        try {
+//            kryo.addDefaultSerializer(PersistentIdentifierBag.class, new FieldSerializer(kryo, PersistentIdentifierBag.class));
+//            kryo.addDefaultSerializer(PersistentBag.class, new FieldSerializer(kryo, PersistentBag.class));
+//            kryo.addDefaultSerializer(PersistentList.class, new FieldSerializer(kryo, PersistentList.class));
+//            kryo.addDefaultSerializer(PersistentSet.class, new FieldSerializer(kryo, PersistentSet.class));
+//            kryo.addDefaultSerializer(PersistentMap.class, new FieldSerializer(kryo, PersistentMap.class));
+//            kryo.addDefaultSerializer(PersistentSortedMap.class, new FieldSerializer(kryo, PersistentSortedMap.class));
+//            kryo.addDefaultSerializer(PersistentSortedSet.class, new FieldSerializer(kryo, PersistentSortedSet.class));
+//        } catch (NoClassDefFoundError e) {
+//            //Don't care ...just means hibernate entities containing collection classes can't be deserialized
+//
+//        }
 
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream(KryoInfo.MAX_MESSAGE_SIZE);
 
