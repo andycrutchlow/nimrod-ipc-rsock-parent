@@ -1,8 +1,6 @@
 package com.nimrodtechs.ipcrsock.processor;
 
-import com.nimrodtechs.ipcrsock.annotations.NimrodFireAndForget;
-import com.nimrodtechs.ipcrsock.annotations.NimrodRequestResponse;
-import com.nimrodtechs.ipcrsock.annotations.NimrodRmiInterface;
+import com.nimrodtechs.ipcrsock.annotations.*;
 import com.squareup.javapoet.*;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.stereotype.Controller;
@@ -30,6 +28,7 @@ public class NimrodRmiProcessor extends AbstractProcessor {
 
     private static final TypeName MONO = ClassName.get("reactor.core.publisher", "Mono");
     private static final TypeName VOID = ClassName.get(Void.class);
+    private static final ClassName DURATION = ClassName.get("java.time", "Duration");
 
     private Filer filer;
     private Messager messager;
@@ -50,8 +49,14 @@ public class NimrodRmiProcessor extends AbstractProcessor {
             if (!(iface instanceof TypeElement interfaceType)) continue;
             try {
                 NimrodRmiInterface ann = interfaceType.getAnnotation(NimrodRmiInterface.class);
+
                 String serviceName = ann.serviceName();
-                generateServerController(interfaceType, serviceName);
+                int concurrency = ann.concurrency();
+                SchedulerType schedulerType = ann.scheduler();
+                long timeoutMs = ann.timeoutMs();
+                RetryPolicy retryPolicy = ann.retryPolicy(); // unused for now
+
+                generateServerController(interfaceType, serviceName, concurrency, schedulerType, timeoutMs, retryPolicy);
                 generateClientProxy(interfaceType, serviceName);
             } catch (Exception e) {
                 messager.printMessage(
@@ -67,7 +72,14 @@ public class NimrodRmiProcessor extends AbstractProcessor {
     // =============================================================================================
     // SERVER SIDE CONTROLLER
     // =============================================================================================
-    private void generateServerController(TypeElement iface, String prefix) throws Exception {
+    private void generateServerController(
+            TypeElement iface,
+            String prefix,
+            int concurrency,
+            SchedulerType schedulerType,
+            long timeoutMs,
+            RetryPolicy retryPolicy
+    ) throws Exception {
         String pkg = elements.getPackageOf(iface).getQualifiedName().toString();
         String ifaceName = iface.getSimpleName().toString();
         String generatedName = ifaceName + "__NimrodRmiController";
@@ -88,6 +100,39 @@ public class NimrodRmiProcessor extends AbstractProcessor {
                 .addParameter(TypeName.get(iface.asType()), "service")
                 .addStatement("this.service = service")
                 .build());
+
+        // Optional service-level scheduler (only generated when needed)
+        boolean needsScheduler = (concurrency > 1) || (schedulerType != SchedulerType.SINGLE);
+
+        if (needsScheduler) {
+            CodeBlock schedulerInit = null;
+
+            switch (schedulerType) {
+                case PARALLEL -> schedulerInit = CodeBlock.of(
+                        "$T.newParallel($S, $L)",
+                        ClassName.get("reactor.core.scheduler", "Schedulers"),
+                        prefix, concurrency
+                );
+                case BOUNDED_ELASTIC -> schedulerInit = CodeBlock.of(
+                        "$T.boundedElastic()",
+                        ClassName.get("reactor.core.scheduler", "Schedulers")
+                );
+                case SINGLE -> {
+                    // Explicit SINGLE: preserve current semantics by not generating a scheduler.
+                    schedulerInit = null;
+                }
+            }
+
+            if (schedulerInit != null) {
+                controller.addField(FieldSpec.builder(
+                                ClassName.get("reactor.core.scheduler", "Scheduler"),
+                                "SERVICE_SCHEDULER",
+                                Modifier.PRIVATE, Modifier.STATIC, Modifier.FINAL
+                        )
+                        .initializer(schedulerInit)
+                        .build());
+            }
+        }
 
         String routeBase = (prefix == null || prefix.isEmpty()) ? "" : prefix + ".";
 
@@ -159,15 +204,34 @@ public class NimrodRmiProcessor extends AbstractProcessor {
             // REQUEST/RESPONSE — normal exception propagation
             // =====================================================================================
             else {
+                boolean needsSubscribeOn = (concurrency > 1) || (schedulerType != SchedulerType.SINGLE);
+                boolean needsTimeout = timeoutMs > 0;
+
                 if (returnType.getKind() == TypeKind.VOID) {
-                    code.addStatement("service.$L($L)", m.getSimpleName(), callArgs.toString());
-                    code.addStatement("return $T.empty()", MONO);
+
+                    // Mono<Void> base
+                    code.add("return $T.fromRunnable(() -> service.$L($L))",
+                            MONO, m.getSimpleName(), callArgs.toString());
+
                 } else {
-                    code.addStatement("$T result = service.$L($L)",
-                            returnType, m.getSimpleName(), callArgs.toString());
-                    code.addStatement("return $T.justOrEmpty(result)", MONO);
+
+                    // Mono<T> base (null => empty, matches justOrEmpty behaviour)
+                    code.add("return $T.fromCallable(() -> service.$L($L))",
+                            MONO, m.getSimpleName(), callArgs.toString());
                 }
+
+                if (needsSubscribeOn && (schedulerType != SchedulerType.SINGLE)) {
+                    // Only subscribeOn when we actually generated a scheduler
+                    code.add("\n    .subscribeOn(SERVICE_SCHEDULER)");
+                }
+
+                if (needsTimeout) {
+                    code.add("\n    .timeout($T.ofMillis($L))", DURATION, timeoutMs);
+                }
+
+                code.addStatement("");
             }
+
 
             // Build method
             MethodSpec.Builder methodBuilder = MethodSpec.methodBuilder(m.getSimpleName().toString())
