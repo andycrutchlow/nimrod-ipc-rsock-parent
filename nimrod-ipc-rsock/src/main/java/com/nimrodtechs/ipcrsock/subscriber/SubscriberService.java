@@ -19,6 +19,7 @@ import jakarta.annotation.PreDestroy;
 import java.nio.channels.ClosedChannelException;
 import java.time.Duration;
 import java.util.*;
+import java.util.regex.Pattern;
 
 @Service
 public class SubscriberService {
@@ -228,12 +229,27 @@ public class SubscriberService {
                 subscriberConnectionInfo.getHost()+" port "+subscriberConnectionInfo.getPort());
         return rSocketRequester;
     }
+    private static final Pattern SUBJECT_PATTERN =
+            Pattern.compile("^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)*(\\.\\*)?$");
+
+    private void validateSubject(String subject) throws NimrodPubSubException {
+        if (!SUBJECT_PATTERN.matcher(subject).matches()) {
+            throw new NimrodPubSubException(
+                    "Invalid subject pattern: " + subject +
+                            ". Valid examples: aaa, aaa.bbb, aaa.*, aaa.bbb.*"
+            );
+        }
+    }
 
     public <T> void subscribe(String publisherName, String aSubject, MessageReceiverInterface<T> listener, Class<T> payloadClass, boolean conflate) throws NimrodPubSubException {
+        //validate the publisherName
         SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
         if(subscriberConnectionInfo == null) {
             throw new NimrodPubSubException(publisherName+" is not a valid publisher to send subscribe "+aSubject+" to");
         }
+        //Validate the aSubject..throws NimrodPubSubException if invalid
+        validateSubject(aSubject);
+
         List<MessageProcessorEntry> messageProcessorEntries;
         boolean wildcard = aSubject.endsWith("*");
         if(wildcard) {

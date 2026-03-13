@@ -1,39 +1,39 @@
 package com.nimrodtechs.ipcrsock.serialization;
 
+import com.esotericsoftware.kryo.kryo5.Kryo;
+import com.esotericsoftware.kryo.kryo5.unsafe.UnsafeInput;
+import com.esotericsoftware.kryo.kryo5.unsafe.UnsafeOutput;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
-
-import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.*;
-
-import com.esotericsoftware.kryo.kryo5.Kryo;
-import com.esotericsoftware.kryo.kryo5.serializers.FieldSerializer;
-import com.esotericsoftware.kryo.kryo5.unsafe.UnsafeInput;
-import com.esotericsoftware.kryo.kryo5.unsafe.UnsafeOutput;
-import lombok.extern.slf4j.Slf4j;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 
 @Component
 public class KryoCommon {
-    private static final Logger log = LoggerFactory.getLogger(KryoCommon.class);
-    public ThreadLocal<KryoInfo> getKryoThreadLocal() {
-        return kryoThreadLocal;
+
+    private final BlockingQueue<KryoInfo> pool;
+
+    public KryoCommon(
+            @Value("${nimrod.kryo.poolSize:16}") int poolSize
+    ) {
+        this.pool = new ArrayBlockingQueue<>(poolSize);
+
+        for (int i = 0; i < poolSize; i++) {
+            pool.add(createKryoInfo());
+        }
     }
 
-    private final ThreadLocal<KryoInfo> kryoThreadLocal = ThreadLocal.withInitial(() -> {
-        log.info("Creating KryoInfo for thread:{}", Thread.currentThread().getName());
+    private KryoInfo createKryoInfo() {
         Kryo kryo = new Kryo();
         kryo.setRegistrationRequired(false);
         kryo.setReferences(true);
-        // OR Register your classes here, for better performance and versioning
-        // kryo.register(YourClass.class);
+
         kryo.register(BigDecimal.class);
         kryo.register(Date.class);
-        //kryo.register(Class.class, new ClassSerializer());
         kryo.register(HashMap.class);
         kryo.register(HashSet.class);
         kryo.register(Boolean[].class);
@@ -59,28 +59,31 @@ public class KryoCommon {
         kryo.register(byte[].class);
         kryo.register(TreeSet.class);
 
-        //Look for application specific property identifying additional DTO classes that will also be serialized
+        ReusableByteArrayOutputStream outputStream =
+                new ReusableByteArrayOutputStream(KryoInfo.KRYO_INITIAL_DATA_SIZE);
 
+        return new KryoInfo(
+                kryo,
+                outputStream,
+                new UnsafeOutput(outputStream, KryoInfo.KRYO_INITIAL_DATA_SIZE),
+                new UnsafeInput()
+        );
+    }
 
-//        try {
-//            kryo.addDefaultSerializer(PersistentIdentifierBag.class, new FieldSerializer(kryo, PersistentIdentifierBag.class));
-//            kryo.addDefaultSerializer(PersistentBag.class, new FieldSerializer(kryo, PersistentBag.class));
-//            kryo.addDefaultSerializer(PersistentList.class, new FieldSerializer(kryo, PersistentList.class));
-//            kryo.addDefaultSerializer(PersistentSet.class, new FieldSerializer(kryo, PersistentSet.class));
-//            kryo.addDefaultSerializer(PersistentMap.class, new FieldSerializer(kryo, PersistentMap.class));
-//            kryo.addDefaultSerializer(PersistentSortedMap.class, new FieldSerializer(kryo, PersistentSortedMap.class));
-//            kryo.addDefaultSerializer(PersistentSortedSet.class, new FieldSerializer(kryo, PersistentSortedSet.class));
-//        } catch (NoClassDefFoundError e) {
-//            //Don't care ...just means hibernate entities containing collection classes can't be deserialized
-//
-//        }
+    public KryoInfo borrow() throws InterruptedException {
+        return pool.take();
+    }
 
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream(KryoInfo.MAX_MESSAGE_SIZE);
+    public KryoInfo tryBorrow() {
+        KryoInfo info = pool.poll();
+        return (info != null) ? info : createKryoInfo(); // fallback burst allocation
+    }
 
-        return new KryoInfo(kryo,outputStream,
-                new UnsafeOutput(outputStream,KryoInfo.MAX_MESSAGE_SIZE),
-                new UnsafeInput());
-    });
-
-
+    public void release(KryoInfo info) {
+        info.getKryo().reset();
+        info.getOutputStream().reset();
+        info.getOutput().reset(); // do it here, consistently
+        // If pool is full (because this was a fallback instance), just drop it.
+        pool.offer(info);
+    }
 }

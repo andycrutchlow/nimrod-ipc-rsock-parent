@@ -6,7 +6,7 @@
 
     <groupId>com.nimrodtechs</groupId>
     <artifactId>nimrod-ipc-rsock-parent</artifactId>
-    <version>4.1-SNAPSHOT</version>
+    <version>4.2-SNAPSHOT</version>
     <packaging>pom</packaging>
     <modules>
         <module>nimrod-ipc-rsock</module>

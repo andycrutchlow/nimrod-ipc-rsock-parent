@@ -15,13 +15,12 @@ public class ConflatedBlockingQueue<E> extends ArrayBlockingQueue<E> {
         this.capacity = capacity;
     }
     @Override
-    public synchronized boolean offer(E e) {
-        // If the queue has reached its capacity
-        if (size() == capacity) {
-            // Remove the second element (assuming queue size is 2)
+    public boolean offer(E e) {
+        if (!super.offer(e)) {
             conflatedCount++;
             super.poll();
+            return super.offer(e);
         }
-        return super.offer(e);
+        return true;
     }
 }

@@ -35,10 +35,6 @@ public abstract class QueueExecutor implements Thread.UncaughtExceptionHandler {
     public final static int MAX_QUEUE = 5096;
     final static Logger logger = LoggerFactory.getLogger("QueueExecutor");
     protected int warningThreshold = MAX_QUEUE - 100;
-    /**
-     * Threads created dynamically as needed. There cannot be more threads than
-     * subjects subscribed. There should be a lot less though.
-     */
     protected ThreadPoolExecutor serviceThreads;
     int logCount = 0;
     private final String publisherName;
@@ -143,14 +139,23 @@ public abstract class QueueExecutor implements Thread.UncaughtExceptionHandler {
          */
         @Override
         public void run() {
-            PublisherPayload publisherPayload;
-            // When there is no more outstanding work then exit this thread
             try {
+                PublisherPayload publisherPayload;
                 while ((publisherPayload = getNextMessage(mpe)) != null) {
-                    mpe.messageReceiver.messageReceived(publisherName, publisherPayload.getSubject(), publisherPayload.getPayload());
+                    mpe.messageReceiver.messageReceived(
+                            publisherName,
+                            publisherPayload.getSubject(),
+                            publisherPayload.getPayload()
+                    );
                 }
             } finally {
                 mpe.getInProgressIndicator().set(false);
+
+                // CRITICAL: restart if new messages arrived
+                if (!mpe.messages.isEmpty()
+                        && mpe.getInProgressIndicator().compareAndSet(false, true)) {
+                    serviceThreads.execute(new ServiceMessageTask(mpe));
+                }
             }
         }
     }

@@ -37,10 +37,12 @@ public class SequentialExecutor extends QueueExecutor {
     @Override
     public void process(PublisherPayload publisherPayload, MessageProcessorEntry mpe) {
         // This is the sequential flavor so just add to end of current list
-        if (mpe.messages.size() > warningThreshold) {
+        int size = mpe.messages.size();
+        if (size > warningThreshold) {
             //Log an error and return for now..
-            if (mpe.messages.size() == MAX_QUEUE) {
-                logger.error(publisherPayload.getSubject() + " Queue size is " + mpe.messages.size() + " which is = max size " + MAX_QUEUE + " so skip ... this is serious!!!!");
+            if (size == MAX_QUEUE) {
+                logger.error("{} Queue size is {} which is = max size {} so skip ... this is serious!!!!",
+                        publisherPayload.getSubject(), size, MAX_QUEUE);
                 return;
             }
             else {
@@ -48,7 +50,10 @@ public class SequentialExecutor extends QueueExecutor {
                 //logger.warn("Queue size is "+mpe.messages.size()+" which is greater than threshold "+warningThreshold);
             }
         }
-        mpe.messages.offer(publisherPayload);
+        if (!mpe.messages.offer(publisherPayload)) {
+            logger.error("Queue full for subject {}", publisherPayload.getSubject());
+            return;
+        }
         if (mpe.getInProgressIndicator().compareAndSet(false, true)) {
             // A current thread is not inprogress so start one
             serviceThreads.execute(new ServiceMessageTask(mpe));

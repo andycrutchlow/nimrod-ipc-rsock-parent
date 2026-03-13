@@ -38,14 +38,24 @@ public class PublisherRSocket implements RSocket {
         return Mono.empty();
     }
 
+    /**
+     * This is the entry point for the Publisher whenever a client requests a stream/Subscribes to a subject
+     * @param payload
+     * @return
+     */
     @Override
-    public Flux<Payload> requestStream(Payload payload) {
-        byte[] bytes = new byte[payload.data().readableBytes()];
-        payload.data().readBytes(bytes);
-        SubscriptionRequest subscriptionRequest = kryoDecoder.deserialize(bytes,SubscriptionRequest.class);
-        //DirectProcessor<Payload> processor = publisherSocket.addDirectProcessor(subscriptionRequest);
-        Flux<Payload> flux = publisherSocket.addDirectProcessor(subscriptionRequest);
-        return flux;
+    public Flux<Payload> requestStream(Payload   payload) {
+        try {
+            byte[] bytes = new byte[payload.data().readableBytes()];
+            payload.data().readBytes(bytes);
+
+            SubscriptionRequest subscriptionRequest =
+                    kryoDecoder.deserialize(bytes, SubscriptionRequest.class);
+
+            return publisherSocket.addDirectProcessor(subscriptionRequest);
+        } finally {
+            payload.release();
+        }
     }
 
 }
