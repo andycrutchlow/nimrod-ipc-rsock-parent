@@ -64,13 +64,27 @@ public class SubscriberService {
 
     }
 
+    static class LocalSubscription {
+        final String subject;
+        final boolean wildcard;
+        final List<MessageProcessorEntry> listeners = new ArrayList<>();
+
+        boolean upstreamActive = false;
+        Class<?> payloadClass;
+
+        LocalSubscription(String subject, boolean wildcard) {
+            this.subject = subject;
+            this.wildcard = wildcard;
+        }
+    }
+
     static class SubscriberConnectionInfo {
         private String name;
         private String host;
         private int port;
 
-        Map<String,List<MessageProcessorEntry>> subjectListeners = new HashMap<>();
-        Map<String,List<MessageProcessorEntry>> wildcardListeners = new HashMap<>();
+        Map<String, LocalSubscription> subjectListeners = new HashMap<>();
+        Map<String, LocalSubscription> wildcardListeners = new HashMap<>();
 
         QueueExecutor conflatingQueueExecutor;
         QueueExecutor sequentialQueueExecutor;
@@ -111,61 +125,200 @@ public class SubscriberService {
         TimerTask reSubscribeTimerTask;
 
     }
+    private LocalSubscription getOrCreateLocalSubscription(
+            SubscriberConnectionInfo subscriberConnectionInfo,
+            String subject,
+            boolean wildcard
+    ) {
+        String key = wildcard ? subject.replace("*", "") : subject;
+        Map<String, LocalSubscription> map =
+                wildcard ? subscriberConnectionInfo.wildcardListeners
+                        : subscriberConnectionInfo.subjectListeners;
+
+        return map.computeIfAbsent(key, k -> new LocalSubscription(subject, wildcard));
+    }
+    private <T> void activateUpstream(
+            String publisherName,
+            SubscriberConnectionInfo subscriberConnectionInfo,
+            LocalSubscription localSubscription,
+            Class<T> payloadClass
+    ) {
+        if (localSubscription.upstreamActive) {
+            return;
+        }
+
+        SubscriptionRequest subscriptionRequest =
+                new SubscriptionRequest(
+                        SubscriptionDirective.REQUEST,
+                        subscriberProcessName,
+                        localSubscription.subject,
+                        localSubscription.wildcard
+                );
+
+        SubscriptionInfo<T> subscriptionInfo =
+                new SubscriptionInfo<>(localSubscription.subject, payloadClass, subscriptionRequest);
+
+        subscriptionInfo.setDisposable(establishFlux(subscriberConnectionInfo, subscriptionInfo));
+        clientSubscriptions.put(publisherName + ":" + localSubscription.subject, subscriptionInfo);
+
+        localSubscription.upstreamActive = true;
+        localSubscription.payloadClass = payloadClass;
+
+        //log.info("SUBSCRIBED TO:{} subject[{}]", publisherName, localSubscription.subject);
+    }
+
+    private void deactivateUpstream(
+            String publisherName,
+            SubscriberConnectionInfo subscriberConnectionInfo,
+            LocalSubscription localSubscription
+    ) {
+        if (!localSubscription.upstreamActive) {
+            return;
+        }
+
+        SubscriptionInfo subscriptionInfo =
+                clientSubscriptions.remove(publisherName + ":" + localSubscription.subject);
+
+        if (subscriptionInfo != null && subscriptionInfo.getDisposable() != null) {
+            subscriptionInfo.getDisposable().dispose();
+        }
+
+        RSocketRequester.RequestSpec requestSpec =
+                subscriberConnectionInfo.getRSocketRequester().route(publisherName);
+
+        requestSpec.data(
+                        new SubscriptionRequest(
+                                SubscriptionDirective.CANCEL,
+                                subscriberProcessName,
+                                localSubscription.subject
+                        )
+                ).send()
+                .doOnError(e -> log.error("Failed sending CANCEL for {} {}", publisherName, localSubscription.subject, e))
+                .subscribe();
+
+        localSubscription.upstreamActive = false;
+
+        log.info("UNSUBSCRIBE FROM:{} subject[{}]", publisherName, localSubscription.subject);
+    }
+
+    private boolean wildcardCovers(String wildcardSubject, String subject) {
+        String prefix = wildcardSubject.replace("*", "");
+        return subject.length() > prefix.length() && subject.startsWith(prefix);
+    }
+
+    private boolean isCoveredByBroaderWildcard(
+            SubscriberConnectionInfo subscriberConnectionInfo,
+            String subject,
+            MessageReceiverInterface<?> listener
+    ) {
+        return subscriberConnectionInfo.wildcardListeners.values().stream()
+                .filter(ls -> ls.upstreamActive)
+                .anyMatch(ls ->
+                        wildcardCovers(ls.subject, subject) &&
+                                ls.listeners.stream().anyMatch(entry -> entry.messageReceiver == listener)
+                );
+    }
 
     class ReSubscribeTask extends TimerTask {
+
         private SubscriberConnectionInfo subscriberConnectionInfo;
         private Map<String, SubscriptionInfo> clientSubscriptions;
 
-        public ReSubscribeTask(SubscriberConnectionInfo subscriberConnectionInfo,Map<String, SubscriptionInfo> clientSubscriptions) {
+        public ReSubscribeTask(
+                SubscriberConnectionInfo subscriberConnectionInfo,
+                Map<String, SubscriptionInfo> clientSubscriptions
+        ) {
             this.subscriberConnectionInfo = subscriberConnectionInfo;
             this.clientSubscriptions = clientSubscriptions;
         }
 
         @Override
         public void run() {
-            StringBuffer sb = new StringBuffer();
-            subscriberConnectionInfo.subjectListeners.keySet().forEach(subscription -> {
-                if(sb.length()>0) {
-                    sb.append(",");
+
+            StringBuilder sb = new StringBuilder();
+
+            subscriberConnectionInfo.subjectListeners.values().forEach(ls -> {
+                if (ls.upstreamActive) {
+                    if (sb.length() > 0) sb.append(",");
+                    sb.append(ls.subject);
                 }
-                sb.append(subscription);
             });
-            subscriberConnectionInfo.wildcardListeners.keySet().forEach(subscription -> {
-                if(sb.length()>0) {
-                    sb.append(",");
+
+            subscriberConnectionInfo.wildcardListeners.values().forEach(ls -> {
+                if (ls.upstreamActive) {
+                    if (sb.length() > 0) sb.append(",");
+                    sb.append(ls.subject);
                 }
-                sb.append(subscription+"*");
             });
-            log.info("Try to resubscribe on publisher ["+ subscriberConnectionInfo.getName()+"] subscriptions["+sb.toString()+"]");
-            if(subscriberConnectionInfo.getRSocketRequester() != null) {
+
+            log.info(
+                    "Try to resubscribe on publisher [{}] subscriptions [{}]",
+                    subscriberConnectionInfo.getName(),
+                    sb.toString()
+            );
+
+            if (subscriberConnectionInfo.getRSocketRequester() != null) {
                 subscriberConnectionInfo.getRSocketRequester().dispose();
             }
-            subscriberConnectionInfo.setrSocketRequester(getRSocketRequester(subscriberConnectionInfo));
-            for(String key : subscriberConnectionInfo.subjectListeners.keySet()) {
-                String fullKey = subscriberConnectionInfo.getName()+":"+key;
+
+            subscriberConnectionInfo.setrSocketRequester(
+                    getRSocketRequester(subscriberConnectionInfo)
+            );
+
+            // ----- exact subjects -----
+            for (LocalSubscription localSubscription :
+                    subscriberConnectionInfo.subjectListeners.values()) {
+
+                if (!localSubscription.upstreamActive) {
+                    continue;
+                }
+
+                String fullKey =
+                        subscriberConnectionInfo.getName() + ":" + localSubscription.subject;
+
                 SubscriptionInfo subscriptionInfo = clientSubscriptions.get(fullKey);
-                if(subscriptionInfo != null) {
-                    if(subscriptionInfo.getDisposable().isDisposed() == false) {
+
+                if (subscriptionInfo != null) {
+
+                    if (!subscriptionInfo.getDisposable().isDisposed()) {
                         subscriptionInfo.getDisposable().dispose();
                     }
-                    Disposable disposable = establishFlux(subscriberConnectionInfo,subscriptionInfo);
+
+                    Disposable disposable =
+                            establishFlux(subscriberConnectionInfo, subscriptionInfo);
+
                     subscriptionInfo.setDisposable(disposable);
                 }
             }
-            for(String key : subscriberConnectionInfo.wildcardListeners.keySet()) {
-                String fullKey = subscriberConnectionInfo.getName()+":"+key;
-                SubscriptionInfo subscriptionInfo = clientSubscriptions.get(fullKey+"*");
-                if(subscriptionInfo != null) {
-                    if(subscriptionInfo.getDisposable().isDisposed() == false) {
+
+            // ----- wildcards -----
+            for (LocalSubscription localSubscription :
+                    subscriberConnectionInfo.wildcardListeners.values()) {
+
+                if (!localSubscription.upstreamActive) {
+                    continue;
+                }
+
+                String fullKey =
+                        subscriberConnectionInfo.getName() + ":" + localSubscription.subject;
+
+                SubscriptionInfo subscriptionInfo = clientSubscriptions.get(fullKey);
+
+                if (subscriptionInfo != null) {
+
+                    if (!subscriptionInfo.getDisposable().isDisposed()) {
                         subscriptionInfo.getDisposable().dispose();
                     }
-                    Disposable disposable = establishFlux(subscriberConnectionInfo,subscriptionInfo);
+
+                    Disposable disposable =
+                            establishFlux(subscriberConnectionInfo, subscriptionInfo);
+
                     subscriptionInfo.setDisposable(disposable);
                 }
             }
+
             subscriberConnectionInfo.reSubscribeTimerTask.cancel();
             subscriberConnectionInfo.reSubscribeTimerTask = null;
-
         }
     }
 
@@ -241,75 +394,151 @@ public class SubscriberService {
         }
     }
 
-    public <T> void subscribe(String publisherName, String aSubject, MessageReceiverInterface<T> listener, Class<T> payloadClass, boolean conflate) throws NimrodPubSubException {
-        //validate the publisherName
+    public <T> void subscribe(
+            String publisherName,
+            String aSubject,
+            MessageReceiverInterface<T> listener,
+            Class<T> payloadClass,
+            boolean conflate
+    ) throws NimrodPubSubException {
+
+        // validate publisherName
         SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
-        if(subscriberConnectionInfo == null) {
-            throw new NimrodPubSubException(publisherName+" is not a valid publisher to send subscribe "+aSubject+" to");
+        if (subscriberConnectionInfo == null) {
+            throw new NimrodPubSubException(
+                    publisherName + " is not a valid publisher to send subscribe " + aSubject + " to"
+            );
         }
-        //Validate the aSubject..throws NimrodPubSubException if invalid
+
+        // validate subject
         validateSubject(aSubject);
 
-        List<MessageProcessorEntry> messageProcessorEntries;
         boolean wildcard = aSubject.endsWith("*");
-        if(wildcard) {
-            messageProcessorEntries = subscriberConnectionInfo.wildcardListeners.get(aSubject.replace("*",""));
-            //Need to also check if there is an existing wildcard listener that would already cover this new subscription and is for the same listener..
-            //E.G. aaa.* already is present and now subscribing for aaa.bbb.*
-            boolean existingWildcardCovered = subscriberConnectionInfo.wildcardListeners.entrySet()
-                    .stream()
-                    .anyMatch(entry -> aSubject.startsWith(entry.getKey()) && entry.getValue().stream().anyMatch(e -> e.messageReceiver == listener));
+
+        LocalSubscription localSubscription =
+                getOrCreateLocalSubscription(subscriberConnectionInfo, aSubject, wildcard);
+
+        // If this wildcard is already covered by an existing broader wildcard for the same listener, ignore it.
+        // Example: aaa.* already exists, now trying to subscribe aaa.bbb.*
+        if (wildcard) {
+            boolean existingWildcardCovered =
+                    subscriberConnectionInfo.wildcardListeners.values().stream()
+                            .anyMatch(existing ->
+                                    !existing.subject.equals(aSubject)
+                                            && existing.upstreamActive
+                                            && wildcardCovers(existing.subject, aSubject.replace("*", "x"))
+                                            && existing.listeners.stream().anyMatch(e -> e.messageReceiver == listener)
+                            );
+
             if (existingWildcardCovered) {
-                log.info("{} wildcard subject[{}] listener [{}] is already present under a broader wildcard : IGNORE", publisherName, aSubject, listener.toString());
+                log.info(
+                        "{} wildcard subject[{}] listener [{}] is already present under a broader wildcard : IGNORE",
+                        publisherName, aSubject, listener
+                );
                 return;
             }
-            //Need to check if adding a new subscription with a less granular wildcard that would now cover one or more existing more granular entries that are now redundant and need to be removed but only in the case where the listener is the same. 
-            List<String> redundantKeys = subscriberConnectionInfo.wildcardListeners.entrySet()
-                    .stream()
-                    .filter(entry -> entry.getKey().startsWith(aSubject.replace("*", ""))
-                            && entry.getValue().stream().anyMatch(e -> e.messageReceiver == listener))
-                    .map(Map.Entry::getKey)
-                    .toList();
-            redundantKeys.forEach(redundantKey -> {
-                log.info("{} wildcard subject [{}] listener [{}] is now redundant due to new broader wildcard : REMOVE",
-                        publisherName, redundantKey + "*", listener.toString());
-                unsubscribe(publisherName, redundantKey + "*", listener);
-            });
-
-        } else {
-            messageProcessorEntries = subscriberConnectionInfo.subjectListeners.get(aSubject);
         }
 
-        //TODO Check if this listener already exists
-        if(messageProcessorEntries == null) {
-            messageProcessorEntries = new ArrayList<>();
-            if(wildcard) {
-                subscriberConnectionInfo.wildcardListeners.put(aSubject.replace("*",""), messageProcessorEntries);
-            } else {
-                subscriberConnectionInfo.subjectListeners.put(aSubject, messageProcessorEntries);
-            }
-        }
-        if(messageProcessorEntries.stream().anyMatch(entry -> entry.messageReceiver == listener)) {
-            log.info(publisherName+" subject["+aSubject+"] listener "+listener.toString()+" already present : IGNORE");
+        // duplicate listener check
+        if (localSubscription.listeners.stream().anyMatch(entry -> entry.messageReceiver == listener)) {
+            log.info(
+                    "{} subject[{}] listener {} already present : IGNORE",
+                    publisherName, aSubject, listener
+            );
             return;
         }
-        //If this is NOT the first subscription to this subject then check the QueueExecutor is the same type - it must be! otherwise error
-        if(messageProcessorEntries.size() == 1) {
-            if( !((messageProcessorEntries.get(0).queueExecutor instanceof ConflatingExecutor && conflate) || (messageProcessorEntries.get(0).queueExecutor instanceof SequentialExecutor && conflate==false))){
-                log.info(publisherName+" subject["+aSubject+"] adding another listener BUT cannot have different type of QueueExecutor : IGNORE");
+
+        // if this is NOT the first listener for this subject, queue executor type must match
+        if (!localSubscription.listeners.isEmpty()) {
+            QueueExecutor existingExecutor = localSubscription.listeners.get(0).queueExecutor;
+
+            boolean sameType =
+                    (existingExecutor instanceof ConflatingExecutor && conflate)
+                            || (existingExecutor instanceof SequentialExecutor && !conflate);
+
+            if (!sameType) {
+                log.info(
+                        "{} subject[{}] adding another listener BUT cannot have different type of QueueExecutor : IGNORE",
+                        publisherName, aSubject
+                );
                 return;
             }
         }
-        MessageProcessorEntry messageProcessorEntry = new MessageProcessorEntry(listener,conflate ? subscriberConnectionInfo.conflatingQueueExecutor: subscriberConnectionInfo.sequentialQueueExecutor);
-        messageProcessorEntries.add(messageProcessorEntry);
-        if(messageProcessorEntries.size() == 1) {
-            SubscriptionRequest subscriptionRequest = new SubscriptionRequest(SubscriptionDirective.REQUEST, subscriberProcessName, aSubject, wildcard);
-            SubscriptionInfo<T> subscriptionInfo = new SubscriptionInfo(aSubject, payloadClass, subscriptionRequest);
-            subscriptionInfo.setDisposable(establishFlux(subscriberConnectionInfo, subscriptionInfo));
-            clientSubscriptions.put(publisherName + ":" + aSubject, subscriptionInfo);
-            log.info("SUBSCRIBED TO:" + publisherName + " " + " subject[" + subscriptionRequest.getSubject() + "] listener["+listener.toString()+"] DispatcherType:" + (conflate ? "conflate" : "sequential"));
+
+        // add listener locally
+        MessageProcessorEntry messageProcessorEntry =
+                new MessageProcessorEntry(
+                        listener,
+                        conflate ? subscriberConnectionInfo.conflatingQueueExecutor
+                                : subscriberConnectionInfo.sequentialQueueExecutor
+                );
+
+        localSubscription.listeners.add(messageProcessorEntry);
+        localSubscription.payloadClass = payloadClass;
+
+        // If this local subscription is not yet active upstream, decide whether it should be.
+        if (!localSubscription.upstreamActive) {
+            boolean coveredByBroaderWildcard =
+                    !wildcard && isCoveredByBroaderWildcard(subscriberConnectionInfo, aSubject, listener);
+
+            if (!coveredByBroaderWildcard) {
+                activateUpstream(publisherName, subscriberConnectionInfo, localSubscription, payloadClass);
+
+                log.info(
+                        "SUBSCRIBED TO:{} subject[{}] listener[{}] DispatcherType:{}",
+                        publisherName,
+                        aSubject,
+                        listener,
+                        conflate ? "conflate" : "sequential"
+                );
+            } else {
+                log.info(
+                        "ADDED listener locally for covered subject[{}] listener[{}] DispatcherType:{}",
+                        aSubject,
+                        listener,
+                        conflate ? "conflate" : "sequential"
+                );
+            }
         } else {
-            log.info("ADDED another listener for existing Subject["+ aSubject+"] listener["+listener.toString()+"] DispatcherType:" + (conflate ? "conflate" : "sequential"));
+            log.info(
+                    "ADDED another listener for existing Subject[{}] listener[{}] DispatcherType:{}",
+                    aSubject,
+                    listener,
+                    conflate ? "conflate" : "sequential"
+            );
+        }
+
+        // If this is a wildcard subscription, it may now cover narrower exact subjects / wildcards
+        // for the same listener. Those should remain locally, but be deactivated upstream.
+        if (wildcard) {
+
+            // Deactivate exact subjects now covered by this wildcard
+            subscriberConnectionInfo.subjectListeners.values().stream()
+                    .filter(ls -> !ls.subject.equals(aSubject))
+                    .filter(ls -> wildcardCovers(aSubject, ls.subject))
+                    .filter(ls -> ls.upstreamActive)
+                    .filter(ls -> ls.listeners.stream().anyMatch(e -> e.messageReceiver == listener))
+                    .forEach(ls -> {
+                        log.info(
+                                "{} subject [{}] listener [{}] is now covered by wildcard [{}] : DEACTIVATE UPSTREAM",
+                                publisherName, ls.subject, listener, aSubject
+                        );
+                        deactivateUpstream(publisherName, subscriberConnectionInfo, ls);
+                    });
+
+            // Deactivate narrower wildcards now covered by this broader wildcard
+            subscriberConnectionInfo.wildcardListeners.values().stream()
+                    .filter(ls -> !ls.subject.equals(aSubject))
+                    .filter(ls -> wildcardCovers(aSubject, ls.subject.replace("*", "x")))
+                    .filter(ls -> ls.upstreamActive)
+                    .filter(ls -> ls.listeners.stream().anyMatch(e -> e.messageReceiver == listener))
+                    .forEach(ls -> {
+                        log.info(
+                                "{} wildcard subject [{}] listener [{}] is now covered by wildcard [{}] : DEACTIVATE UPSTREAM",
+                                publisherName, ls.subject, listener, aSubject
+                        );
+                        deactivateUpstream(publisherName, subscriberConnectionInfo, ls);
+                    });
         }
     }
 
@@ -376,85 +605,171 @@ public class SubscriberService {
     /**
      * Remove the subscription for the listener.
      * If there are now no more listeners in this process for this subject then use fire-and-forget send to tell the publisher to stop publishing.
-     * There show be a confirmation message back from the publisher telling us that DirectProcessor has be closed gracefully *
+     * There should be a confirmation message back from the publisher telling us that DirectProcessor has be closed gracefully *
      * @param publisherName
      * @param aSubject
      * @param listener
      * @param <T>
      */
-    public <T> void unsubscribe(String publisherName, String aSubject, MessageReceiverInterface<T> listener)  {
-        SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
-        if(subscriberConnectionInfo == null) {
-            log.error(publisherName+" is not a valid publisher to send unsubscribe "+aSubject+" to");
-        }
-        List<MessageProcessorEntry> messageProcessorEntries;
-        if(aSubject.endsWith("*")) {
-            messageProcessorEntries = subscriberConnectionInfo.wildcardListeners.get(aSubject.replace("*",""));
-        } else {
-            messageProcessorEntries = subscriberConnectionInfo.subjectListeners.get(aSubject);
-        }
-        //TODO Check if this listener already exists
-        if(messageProcessorEntries == null) {
-            log.info(publisherName+" subject["+aSubject+"] does not exist as a current subscription : IGNORE");
-            return;
-        }
-        //Look for the listener in the current list of listeners and remove it
-        MessageProcessorEntry messageProcessorEntry = messageProcessorEntries.stream()
-                .filter(entry -> entry.messageReceiver == listener)
-                .findFirst()
-                .orElse(null);
+    public <T> void unsubscribe(String publisherName, String aSubject, MessageReceiverInterface<T> listener) {
 
-        if(messageProcessorEntry != null) {
-            //messageDispatcher.queueExecutor.dispose();
-            messageProcessorEntries.remove(messageProcessorEntry);
-            log.info("REMOVED LISTENER:"+listener.getClass().getSimpleName()+" from "+publisherName+" "+" subject["+aSubject+"] remaining count="+ messageProcessorEntries.size());
-        } else {
-            log.info(publisherName+" subject["+aSubject+"] does not exist as a current subscription : IGNORE");
+        SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
+        if (subscriberConnectionInfo == null) {
+            log.error("{} is not a valid publisher to send unsubscribe {} to", publisherName, aSubject);
             return;
         }
-        if(messageProcessorEntries.size() == 0) {
-            Disposable disposable = clientSubscriptions.get(publisherName + ":" + aSubject).disposable;
-            if(disposable != null) {
-                disposable.dispose();
+
+        boolean wildcard = aSubject.endsWith("*");
+
+        LocalSubscription localSubscription;
+
+        if (wildcard) {
+            localSubscription = subscriberConnectionInfo.wildcardListeners.get(aSubject.replace("*", ""));
+        } else {
+            localSubscription = subscriberConnectionInfo.subjectListeners.get(aSubject);
+        }
+
+        if (localSubscription == null) {
+            log.info("{} subject[{}] does not exist as a current subscription : IGNORE", publisherName, aSubject);
+            return;
+        }
+
+        // find listener
+        MessageProcessorEntry messageProcessorEntry =
+                localSubscription.listeners.stream()
+                        .filter(entry -> entry.messageReceiver == listener)
+                        .findFirst()
+                        .orElse(null);
+
+        if (messageProcessorEntry == null) {
+            log.info("{} subject[{}] listener not found : IGNORE", publisherName, aSubject);
+            return;
+        }
+
+        // remove listener
+        localSubscription.listeners.remove(messageProcessorEntry);
+
+        log.info(
+                "REMOVED LISTENER:{} from {} subject[{}] remaining count={}",
+                listener.getClass().getSimpleName(),
+                publisherName,
+                aSubject,
+                localSubscription.listeners.size()
+        );
+
+        // if no listeners remain
+        if (localSubscription.listeners.isEmpty()) {
+
+            if (localSubscription.upstreamActive) {
+                deactivateUpstream(publisherName, subscriberConnectionInfo, localSubscription);
             }
-            //Tell the publisher to stop publishing messages to this process for this subject
-            RSocketRequester.RequestSpec requestSpec = subscriberConnectionInfo.getRSocketRequester().route(publisherName);
-            requestSpec.data(new SubscriptionRequest(SubscriptionDirective.CANCEL,subscriberProcessName,aSubject)).send().subscribe();
-            //TODO TEst this !!!!
-            if(aSubject.endsWith("*")) {
-                subscriberConnectionInfo.wildcardListeners.remove(aSubject.replace("*",""));
+
+            if (wildcard) {
+                subscriberConnectionInfo.wildcardListeners.remove(aSubject.replace("*", ""));
             } else {
                 subscriberConnectionInfo.subjectListeners.remove(aSubject);
             }
-            log.info("UNSUBSCRIBE FROM:"+publisherName+" "+" subject["+aSubject+"]");
-        }
-    }
 
-    private <T> void dispatchMessage(SubscriberConnectionInfo subscriberConnectionInfo, String originalSubject, T messagePayload) {
-        //Look for exact match on originalSubject
-        PublisherPayload publisherPayload = (PublisherPayload)messagePayload;
-        HashSet<MessageProcessorEntry> listenersToBeNotified = new HashSet<>();
-        List<MessageProcessorEntry> messageProcessorEntries = subscriberConnectionInfo.subjectListeners.get(publisherPayload.getSubject());
-        if(messageProcessorEntries != null) {
-            for (MessageProcessorEntry messageProcessorEntry : messageProcessorEntries) {
-                listenersToBeNotified.add(messageProcessorEntry);
-            }
-        }
-        //Look for any wildcard matches...the subscription logic above should ensure listener will only be called once..even if it duplicated a subject or called with a more granular version of wildcard subscription in subject..e.g. aaa.bbb.* and aaa.*
-        if(subscriberConnectionInfo.wildcardListeners.size() > 0) {
-            for (Iterator<Map.Entry<String, List<MessageProcessorEntry>>> it = subscriberConnectionInfo.wildcardListeners.entrySet().iterator(); it.hasNext(); ) {
-                //PublisherSocketImpl.SubscriberFluxInfo sfi = it.next().getValue();
-                Map.Entry<String, List<MessageProcessorEntry>> next = it.next();
-                if(publisherPayload.getSubject().length() > next.getKey().length() && publisherPayload.getSubject().startsWith(next.getKey()) ) {
-                    for(MessageProcessorEntry messageProcessorEntry : next.getValue()) {
-                        listenersToBeNotified.add(messageProcessorEntry);
+            log.info("UNSUBSCRIBE FROM:{} subject[{}]", publisherName, aSubject);
+
+            // ----------------------------------------------------
+            // NEW LOGIC : restore exact subjects previously covered
+            // ----------------------------------------------------
+
+            if (wildcard) {
+
+                String wildcardPrefix = aSubject.replace("*", "");
+
+                for (LocalSubscription subjectSub : subscriberConnectionInfo.subjectListeners.values()) {
+
+                    // subject must match wildcard
+                    if (!subjectSub.subject.startsWith(wildcardPrefix)) {
+                        continue;
+                    }
+
+                    if (subjectSub.listeners.isEmpty()) {
+                        continue;
+                    }
+
+                    if (subjectSub.upstreamActive) {
+                        continue;
+                    }
+
+                    // check if another wildcard still covers it
+                    boolean stillCovered =
+                            subscriberConnectionInfo.wildcardListeners.values().stream()
+                                    .filter(w -> w.upstreamActive)
+                                    .anyMatch(w -> wildcardCovers(w.subject, subjectSub.subject));
+
+                    if (!stillCovered) {
+
+                        log.info(
+                                "{} restoring upstream subscription for subject [{}] after wildcard removal",
+                                publisherName,
+                                subjectSub.subject
+                        );
+
+                        @SuppressWarnings("unchecked")
+                        Class<Object> payloadClazz = (Class<Object>) subjectSub.payloadClass;
+
+                        activateUpstream(
+                                publisherName,
+                                subscriberConnectionInfo,
+                                subjectSub,
+                                payloadClazz
+                        );
                     }
                 }
             }
         }
-        //At this point hand off the calls to the various listeners for this message to an executor queue.
-        listenersToBeNotified.stream().forEach( entry -> entry.queueExecutor.process(publisherPayload,entry));
+    }
 
-        //listenersToBeNotified.stream().forEach( entry -> entry.messageReceiver.messageReceived(subscriberInfo.getName(),publisherPayload.getSubject(),publisherPayload.getPayload()));
+    private <T> void dispatchMessage(
+            SubscriberConnectionInfo subscriberConnectionInfo,
+            String originalSubject,
+            T messagePayload
+    ) {
+
+        PublisherPayload publisherPayload = (PublisherPayload) messagePayload;
+        String subject = publisherPayload.getSubject();
+
+        // ----- exact match -----
+
+        LocalSubscription exactSubscription =
+                subscriberConnectionInfo.subjectListeners.get(subject);
+
+        if (exactSubscription != null) {
+
+            for (MessageProcessorEntry entry : exactSubscription.listeners) {
+                entry.queueExecutor.process(publisherPayload, entry);
+            }
+        }
+
+        // ----- wildcard matches -----
+
+        if (!subscriberConnectionInfo.wildcardListeners.isEmpty()) {
+
+            for (Map.Entry<String, LocalSubscription> wildcardEntry :
+                    subscriberConnectionInfo.wildcardListeners.entrySet()) {
+
+                String prefix = wildcardEntry.getKey();
+
+                if (subject.length() > prefix.length() && subject.startsWith(prefix)) {
+
+                    LocalSubscription wildcardSubscription = wildcardEntry.getValue();
+
+                    for (MessageProcessorEntry entry : wildcardSubscription.listeners) {
+
+                        // skip duplicate listener already called by exact subscription
+                        if (exactSubscription != null &&
+                                exactSubscription.listeners.contains(entry)) {
+                            continue;
+                        }
+
+                        entry.queueExecutor.process(publisherPayload, entry);
+                    }
+                }
+            }
+        }
     }
 }
