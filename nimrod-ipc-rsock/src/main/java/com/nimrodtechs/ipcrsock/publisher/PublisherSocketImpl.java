@@ -18,17 +18,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import reactor.core.publisher.DirectProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -36,15 +36,34 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Component
 public class PublisherSocketImpl implements SocketAcceptor {
     private static final Logger log = LoggerFactory.getLogger(PublisherSocketImpl.class);
+
     private final KryoEncoder kryoEncoder;
     private final KryoDecoder kryoDecoder;
 
     @Value("${nimrod.rsock.publisher.port:-1}")
     int publisherPort;
+    public int getPublisherPort() {
+        return publisherPort;
+    }
+    public void setPublisherPort(int publisherPort) {
+        this.publisherPort = publisherPort;
+    }
 
     private static int logLevel = 0;
 
+    private static final Sinks.EmitFailureHandler emitFailureHandler =
+            Sinks.EmitFailureHandler.busyLooping(Duration.ofMillis(500));
+
+    /**
+     * Tracks all subscription requests made on a given connection so they can be removed if the connection closes.
+     */
     private final Map<RSocket, Set<SubscriptionRequest>> connectionSubscriptions =
+            new ConcurrentHashMap<>();
+
+    /**
+     * Enforce one live socket connection per subscriber requestor name.
+     */
+    private final Map<String, RSocket> activeSubscribers =
             new ConcurrentHashMap<>();
 
     public PublisherSocketImpl(KryoEncoder kryoEncoder, KryoDecoder kryoDecoder) {
@@ -60,18 +79,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
         String modifiedSubject;
 
         private final Set<String> subscriberNames = ConcurrentHashMap.newKeySet();
-        Set<RSocket> connections = ConcurrentHashMap.newKeySet();
-        DirectProcessor<Payload> directProcessor;
         Sinks.Many<Payload> sink;
-
-        SubscriberFluxInfo(DirectProcessor<Payload> directProcessor, String unmodifiedSubject) {
-            this.directProcessor = directProcessor;
-            if (unmodifiedSubject.endsWith("*")) {
-                modifiedSubject = unmodifiedSubject.substring(0, unmodifiedSubject.lastIndexOf("*"));
-            } else {
-                modifiedSubject = unmodifiedSubject;
-            }
-        }
 
         SubscriberFluxInfo(Sinks.Many<Payload> sink, String unmodifiedSubject) {
             this.sink = sink;
@@ -81,6 +89,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
                 modifiedSubject = unmodifiedSubject;
             }
         }
+
         public Set<String> getSubscriberNames() {
             return subscriberNames;
         }
@@ -94,7 +103,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
     // exact subject subscriptions
     private final Map<String, SubscriberFluxInfo> subjectProcessors = new ConcurrentHashMap<>();
 
-    // wildcard sharing semantics: one shared processor per wildcard subject
+    // wildcard sharing semantics: one shared sink per wildcard subject
     private final Map<String, SubscriberFluxInfo> wildcardSubscriptions = new ConcurrentHashMap<>();
 
     // fast wildcard routing structure
@@ -105,23 +114,29 @@ public class PublisherSocketImpl implements SocketAcceptor {
     @PostConstruct
     void init() {
         if (publisherPort != -1) {
-            log.info("Configuring Nimrod RSocket Publisher on port {}", publisherPort);
-            RSocketServer.create(this)
-                    .bind(TcpServerTransport.create(publisherPort))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .subscribe();
+            start(publisherPort);
+        } else {
+            log.info("No Nimrod RSocket Publisher configured. Assume will be supplied via start() method");
         }
+    }
+
+    public void start(int port) {
+        this.publisherPort = port;
+
+        log.info("Configuring Nimrod RSocket Publisher on port {}", publisherPort);
+        RSocketServer.create(this)
+                .bind(TcpServerTransport.create(publisherPort))
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe();
     }
 
     @Override
     public Mono<RSocket> accept(ConnectionSetupPayload connectionSetupPayload, RSocket rSocket) {
         log.info("Subscriber connection established");
 
-        // NEW: detect subscriber crash / disconnect
         rSocket.onClose()
                 .doFinally(signal -> {
                     log.info("Subscriber connection closed: {}", signal);
-                    // clean up all subscriptions belonging to this subscriber
                     cleanupConnection(rSocket);
                 })
                 .subscribe();
@@ -130,6 +145,27 @@ public class PublisherSocketImpl implements SocketAcceptor {
     }
 
     public Flux<Payload> addDirectProcessor(SubscriptionRequest subscriptionRequest, RSocket connection) {
+        String requestor = subscriptionRequest.getRequestor();
+
+        // Enforce single connection per requestor (atomic + safe)
+        activeSubscribers.compute(requestor, (key, existingConnection) -> {
+
+            if (existingConnection != null && existingConnection != connection) {
+                log.warn("Duplicate connection detected for requestor {} - cleaning up previous connection", requestor);
+
+                // CRITICAL: force cleanup BEFORE replacing connection
+                cleanupConnection(existingConnection);
+
+                try {
+                    existingConnection.dispose();
+                } catch (Exception e) {
+                    log.warn("Error closing previous connection for requestor {}", requestor, e);
+                }
+            }
+
+            return connection;
+        });
+
         SubscriberFluxInfo subscriberFluxInfo;
 
         if (subscriptionRequest.isWildcard()) {
@@ -137,7 +173,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
                     subscriptionRequest.getSubject(),
                     s -> {
                         SubscriberFluxInfo sfi =
-                                new SubscriberFluxInfo(getDirectProcessor(subscriptionRequest), subscriptionRequest.getSubject());
+                                new SubscriberFluxInfo(getSink(), subscriptionRequest.getSubject());
                         insertIntoTrie(subscriptionRequest.getSubject(), sfi);
                         return sfi;
                     }
@@ -145,21 +181,31 @@ public class PublisherSocketImpl implements SocketAcceptor {
         } else {
             subscriberFluxInfo = subjectProcessors.computeIfAbsent(
                     subscriptionRequest.getSubject(),
-                    s -> new SubscriberFluxInfo(getDirectProcessor(subscriptionRequest), subscriptionRequest.getSubject())
+                    s -> new SubscriberFluxInfo(getSink(), subscriptionRequest.getSubject())
             );
         }
 
-        notifyListeners(subscriptionRequest,false);
+        notifyListeners(subscriptionRequest, false);
         subscriberFluxInfo.getSubscriberNames().add(subscriptionRequest.getRequestor());
-        subscriberFluxInfo.connections.add(connection);
-        //Additionally, record connection to subject cross-reference
+
         connectionSubscriptions
                 .computeIfAbsent(connection, k -> ConcurrentHashMap.newKeySet())
                 .add(subscriptionRequest);
-        return subscriberFluxInfo.directProcessor;
+
+        return subscriberFluxInfo.sink.asFlux()
+                .doOnCancel(() -> log.debug("Subscription cancelled: {}", subscriptionRequest))
+                .doOnError(error -> {
+                    if (error instanceof CancellationException) {
+                        log.info("Subscription cancelled: {}", subscriptionRequest);
+                    } else {
+                        log.error("Subscription error for {} : {}", subscriptionRequest, error.toString(), error);
+                    }
+                })
+                .doOnComplete(() -> log.info("Subscription completed: {}", subscriptionRequest));
     }
 
-    private void insertIntoTrie(String wildcardSubject, SubscriberFluxInfo sfi) {
+
+    private void insertIntoTrie(String wildcardSubject, SubscriberFluxInfo subscriberFluxInfo) {
         String prefix = wildcardSubject.substring(0, wildcardSubject.length() - 1);
         if (prefix.endsWith(".")) {
             prefix = prefix.substring(0, prefix.length() - 1);
@@ -182,10 +228,10 @@ public class PublisherSocketImpl implements SocketAcceptor {
             start = dot + 1;
         }
 
-        node.wildcardSubscribers.add(sfi);
+        node.wildcardSubscribers.add(subscriberFluxInfo);
     }
 
-    private void removeFromTrie(String wildcardSubject, SubscriberFluxInfo sfi) {
+    private void removeFromTrie(String wildcardSubject, SubscriberFluxInfo subscriberFluxInfo) {
         String prefix = wildcardSubject.substring(0, wildcardSubject.length() - 1);
         if (prefix.endsWith(".")) {
             prefix = prefix.substring(0, prefix.length() - 1);
@@ -211,30 +257,11 @@ public class PublisherSocketImpl implements SocketAcceptor {
             start = dot + 1;
         }
 
-        node.wildcardSubscribers.remove(sfi);
+        node.wildcardSubscribers.remove(subscriberFluxInfo);
     }
 
-    private static <E> DirectProcessor<E> getDirectProcessor(SubscriptionRequest subscriptionRequest) {
-
-        DirectProcessor<E> directProcessor = DirectProcessor.create();
-
-        directProcessor.doOnCancel(() ->
-                log.debug("Subscription cancelled: {}", subscriptionRequest)
-        );
-
-        directProcessor.doOnError(error -> {
-            if (error instanceof CancellationException) {
-                log.info("Subscription cancelled: {}", subscriptionRequest);
-            } else {
-                log.error("Subscription error for {} : {}", subscriptionRequest, error.toString(), error);
-            }
-        });
-
-        directProcessor.doOnComplete(() ->
-                log.info("Subscription completed: {}", subscriptionRequest)
-        );
-
-        return directProcessor;
+    private static Sinks.Many<Payload> getSink() {
+        return Sinks.many().multicast().onBackpressureBuffer();
     }
 
     public void removeDirectProcessor(SubscriptionRequest subscriptionRequest, boolean isDisconnect) {
@@ -247,7 +274,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
                 subscriberFluxInfo.getSubscriberNames().remove(subscriptionRequest.getRequestor());
 
                 if (subscriberFluxInfo.getSubscriberNames().isEmpty()) {
-                    subscriberFluxInfo.directProcessor.onComplete();
+                    subscriberFluxInfo.sink.tryEmitComplete();
                     wildcardSubscriptions.remove(subscriptionRequest.getSubject());
                     removeFromTrie(subscriptionRequest.getSubject(), subscriberFluxInfo);
 
@@ -260,7 +287,8 @@ public class PublisherSocketImpl implements SocketAcceptor {
                             subscriptionRequest.getRequestor(),
                             subscriberFluxInfo.getSubscriberNames().size());
                 }
-                notifyListeners(subscriptionRequest,isDisconnect);
+
+                notifyListeners(subscriptionRequest, isDisconnect);
             }
 
             return;
@@ -272,7 +300,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
             subscriberFluxInfo.getSubscriberNames().remove(subscriptionRequest.getRequestor());
 
             if (subscriberFluxInfo.getSubscriberNames().isEmpty()) {
-                subscriberFluxInfo.directProcessor.onComplete();
+                subscriberFluxInfo.sink.tryEmitComplete();
                 subjectProcessors.remove(subscriptionRequest.getSubject());
 
                 log.info("REMOVED publishing of {} to {}",
@@ -285,13 +313,15 @@ public class PublisherSocketImpl implements SocketAcceptor {
                         subscriberFluxInfo.getSubscriberNames().size());
             }
 
-            notifyListeners(subscriptionRequest,isDisconnect);
+            notifyListeners(subscriptionRequest, isDisconnect);
         }
     }
 
     private void cleanupConnection(RSocket connection) {
 
         Set<SubscriptionRequest> subs = connectionSubscriptions.remove(connection);
+
+        activeSubscribers.entrySet().removeIf(entry -> entry.getValue() == connection);
 
         if (subs == null) {
             return;
@@ -300,10 +330,9 @@ public class PublisherSocketImpl implements SocketAcceptor {
         log.info("Cleaning {} subscriptions for closed connection", subs.size());
 
         for (SubscriptionRequest sub : subs) {
-            removeDirectProcessor(sub,true);
+            removeDirectProcessor(sub, true);
         }
     }
-
 
     /**
      * If there are currently no subscribers, then just return.
@@ -319,37 +348,29 @@ public class PublisherSocketImpl implements SocketAcceptor {
             log.info("PUBLISH:[{}]:[{}]", subject, data);
         }
 
-        Payload payloadData = null;
+        Set<SubscriberFluxInfo> alreadySentProcessors = new HashSet<>();
+
         SubscriberFluxInfo subscriberFluxInfo = subjectProcessors.get(subject);
-        HashSet<String> alreadySentSubscribers = new HashSet<>();
 
-        try {
-            if (subscriberFluxInfo != null && !subscriberFluxInfo.getSubscriberNames().isEmpty()) {
-                PublisherPayload publisherPayload = new PublisherPayload(System.nanoTime(), subject, data);
-                payloadData = DefaultPayload.create(kryoEncoder.serialize(publisherPayload));
-                subscriberFluxInfo.directProcessor.onNext(payloadData);
+        if (subscriberFluxInfo != null && !subscriberFluxInfo.getSubscriberNames().isEmpty()) {
+            if (alreadySentProcessors.add(subscriberFluxInfo)) {
+                PublisherPayload publisherPayload =
+                        new PublisherPayload(System.nanoTime(), subject, data);
 
-                // preserve old duplicate-suppression semantics
-                String firstSubscriber =
-                        subscriberFluxInfo.getSubscriberNames().iterator().next();
+                Payload payloadData =
+                        DefaultPayload.create(kryoEncoder.serialize(publisherPayload));
 
-                alreadySentSubscribers.add(firstSubscriber);
-            }
-
-            payloadData = dispatchWildcards(subject, data, payloadData, alreadySentSubscribers);
-
-        } finally {
-            if (payloadData != null) {
-                payloadData.release();
+                subscriberFluxInfo.sink.emitNext(payloadData, emitFailureHandler);
             }
         }
+
+        dispatchWildcards(subject, data, alreadySentProcessors);
     }
 
-    private Payload dispatchWildcards(
+    private void dispatchWildcards(
             String subject,
             Object data,
-            Payload payloadData,
-            Set<String> alreadySentSubscribers
+            Set<SubscriberFluxInfo> alreadySentProcessors
     ) {
         TrieNode node = wildcardRoot;
         int start = 0;
@@ -362,31 +383,25 @@ public class PublisherSocketImpl implements SocketAcceptor {
 
             node = node.children.get(segment);
             if (node == null) {
-                return payloadData;
+                return;
             }
 
-            for (SubscriberFluxInfo sfi : node.wildcardSubscribers) {
+            for (SubscriberFluxInfo subscriberFluxInfo : node.wildcardSubscribers) {
+                if (!subscriberFluxInfo.getSubscriberNames().isEmpty()) {
+                    if (alreadySentProcessors.add(subscriberFluxInfo)) {
+                        PublisherPayload publisherPayload =
+                                new PublisherPayload(System.nanoTime(), subject, data);
 
-                if (!sfi.getSubscriberNames().isEmpty()) {
+                        Payload payloadData =
+                                DefaultPayload.create(kryoEncoder.serialize(publisherPayload));
 
-                    String subscriber = sfi.getSubscriberNames().iterator().next();
-
-                    if (!alreadySentSubscribers.contains(subscriber)) {
-
-                        if (payloadData == null) {
-                            PublisherPayload publisherPayload =
-                                    new PublisherPayload(System.nanoTime(), subject, data);
-                            payloadData = DefaultPayload.create(kryoEncoder.serialize(publisherPayload));
-                        }
-
-                        sfi.directProcessor.onNext(payloadData);
-
-                        alreadySentSubscribers.add(subscriber);
+                        subscriberFluxInfo.sink.emitNext(payloadData, emitFailureHandler);
                     }
                 }
             }
+
             if (dot == -1) {
-                return payloadData;
+                return;
             }
 
             start = dot + 1;

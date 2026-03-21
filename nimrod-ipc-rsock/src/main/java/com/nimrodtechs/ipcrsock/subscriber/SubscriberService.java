@@ -384,6 +384,9 @@ public class SubscriberService {
                     "If subscriberProperties are provided then property or VM param spring.application.name must be supplied"
             );
         }
+        //Need to ensure the resulting subscriberProcessName is unique across all subscribers, even if they have the same logical name e.g. pod replicas
+        subscriberProcessName = subscriberProcessName + "-" + UUID.randomUUID().toString();
+        log.info("subscriberProcessName={}", subscriberProcessName);
 
         for (String subscriberInfoItems : subscriberProperties.getSetup()) {
             String[] items = subscriberInfoItems.split(",");
@@ -517,7 +520,8 @@ public class SubscriberService {
                 // Prevent Reactor from flooding publisher with unbounded demand
                 .limitRate(256)
                 // Offload heavy work from Netty I/O threads
-                .publishOn(Schedulers.boundedElastic());
+                //.publishOn(Schedulers.boundedElastic());
+                .publishOn(Schedulers.parallel());
 
         Disposable disposable = flux.subscribe(
                 messagePayload -> {
