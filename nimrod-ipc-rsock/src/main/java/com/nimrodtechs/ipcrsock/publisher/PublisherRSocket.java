@@ -11,10 +11,12 @@ public class PublisherRSocket implements RSocket {
 
     final PublisherSocketImpl publisherSocket;
     final KryoDecoder kryoDecoder;
+    final RSocket connection;
 
-    public PublisherRSocket(PublisherSocketImpl publisherSocket, KryoDecoder kryoDecoder) {
+    public PublisherRSocket(PublisherSocketImpl publisherSocket, KryoDecoder kryoDecoder, RSocket connection) {
         this.publisherSocket = publisherSocket;
         this.kryoDecoder = kryoDecoder;
+        this.connection = connection;
     }
 
     @Override
@@ -23,7 +25,7 @@ public class PublisherRSocket implements RSocket {
             byte[] bytes = new byte[payload.data().readableBytes()];
             payload.data().readBytes(bytes);
             SubscriptionRequest subscriptionRequest = kryoDecoder.deserialize(bytes, SubscriptionRequest.class);
-            publisherSocket.removeDirectProcessor(subscriptionRequest);
+            publisherSocket.removeDirectProcessor(subscriptionRequest,false);
         } finally {
             try { payload.release(); }
             catch (Throwable ignore) {}
@@ -52,7 +54,7 @@ public class PublisherRSocket implements RSocket {
             SubscriptionRequest subscriptionRequest =
                     kryoDecoder.deserialize(bytes, SubscriptionRequest.class);
 
-            return publisherSocket.addDirectProcessor(subscriptionRequest);
+            return publisherSocket.addDirectProcessor(subscriptionRequest, connection);
         } finally {
             payload.release();
         }

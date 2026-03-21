@@ -44,6 +44,9 @@ public class PublisherSocketImpl implements SocketAcceptor {
 
     private static int logLevel = 0;
 
+    private final Map<RSocket, Set<SubscriptionRequest>> connectionSubscriptions =
+            new ConcurrentHashMap<>();
+
     public PublisherSocketImpl(KryoEncoder kryoEncoder, KryoDecoder kryoDecoder) {
         this.kryoEncoder = kryoEncoder;
         this.kryoDecoder = kryoDecoder;
@@ -57,6 +60,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
         String modifiedSubject;
 
         private final Set<String> subscriberNames = ConcurrentHashMap.newKeySet();
+        Set<RSocket> connections = ConcurrentHashMap.newKeySet();
         DirectProcessor<Payload> directProcessor;
         Sinks.Many<Payload> sink;
 
@@ -111,10 +115,21 @@ public class PublisherSocketImpl implements SocketAcceptor {
 
     @Override
     public Mono<RSocket> accept(ConnectionSetupPayload connectionSetupPayload, RSocket rSocket) {
-        return Mono.just(new PublisherRSocket(this, kryoDecoder));
+        log.info("Subscriber connection established");
+
+        // NEW: detect subscriber crash / disconnect
+        rSocket.onClose()
+                .doFinally(signal -> {
+                    log.info("Subscriber connection closed: {}", signal);
+                    // clean up all subscriptions belonging to this subscriber
+                    cleanupConnection(rSocket);
+                })
+                .subscribe();
+
+        return Mono.just(new PublisherRSocket(this, kryoDecoder, rSocket));
     }
 
-    public Flux<Payload> addDirectProcessor(SubscriptionRequest subscriptionRequest) {
+    public Flux<Payload> addDirectProcessor(SubscriptionRequest subscriptionRequest, RSocket connection) {
         SubscriberFluxInfo subscriberFluxInfo;
 
         if (subscriptionRequest.isWildcard()) {
@@ -134,9 +149,13 @@ public class PublisherSocketImpl implements SocketAcceptor {
             );
         }
 
-        notifyListeners(subscriptionRequest);
+        notifyListeners(subscriptionRequest,false);
         subscriberFluxInfo.getSubscriberNames().add(subscriptionRequest.getRequestor());
-
+        subscriberFluxInfo.connections.add(connection);
+        //Additionally, record connection to subject cross-reference
+        connectionSubscriptions
+                .computeIfAbsent(connection, k -> ConcurrentHashMap.newKeySet())
+                .add(subscriptionRequest);
         return subscriberFluxInfo.directProcessor;
     }
 
@@ -218,7 +237,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
         return directProcessor;
     }
 
-    public void removeDirectProcessor(SubscriptionRequest subscriptionRequest) {
+    public void removeDirectProcessor(SubscriptionRequest subscriptionRequest, boolean isDisconnect) {
 
         if (subscriptionRequest.isWildcard() || subscriptionRequest.getSubject().endsWith("*")) {
 
@@ -241,8 +260,7 @@ public class PublisherSocketImpl implements SocketAcceptor {
                             subscriptionRequest.getRequestor(),
                             subscriberFluxInfo.getSubscriberNames().size());
                 }
-
-                notifyListeners(subscriptionRequest);
+                notifyListeners(subscriptionRequest,isDisconnect);
             }
 
             return;
@@ -267,12 +285,28 @@ public class PublisherSocketImpl implements SocketAcceptor {
                         subscriberFluxInfo.getSubscriberNames().size());
             }
 
-            notifyListeners(subscriptionRequest);
+            notifyListeners(subscriptionRequest,isDisconnect);
         }
     }
 
+    private void cleanupConnection(RSocket connection) {
+
+        Set<SubscriptionRequest> subs = connectionSubscriptions.remove(connection);
+
+        if (subs == null) {
+            return;
+        }
+
+        log.info("Cleaning {} subscriptions for closed connection", subs.size());
+
+        for (SubscriptionRequest sub : subs) {
+            removeDirectProcessor(sub,true);
+        }
+    }
+
+
     /**
-     * If there are currently no subscribers then just return.
+     * If there are currently no subscribers, then just return.
      */
     public void publish(String subject, Object data) {
         if (publisherPort == -1) {
@@ -363,12 +397,12 @@ public class PublisherSocketImpl implements SocketAcceptor {
         subscriptionListeners.add(listener);
     }
 
-    public void notifyListeners(SubscriptionRequest subscriptionRequest) {
+    public void notifyListeners(SubscriptionRequest subscriptionRequest, boolean isDisconnect) {
         for (SubscriptionListener listener : subscriptionListeners) {
-            if (subscriptionRequest.getSubscriptionDirective() == SubscriptionDirective.REQUEST) {
-                listener.onSubscription(subscriptionRequest);
-            } else if (subscriptionRequest.getSubscriptionDirective() == SubscriptionDirective.CANCEL) {
+            if (subscriptionRequest.getSubscriptionDirective() == SubscriptionDirective.CANCEL || isDisconnect) {
                 listener.onSubscriptionRemove(subscriptionRequest);
+            } else if (subscriptionRequest.getSubscriptionDirective() == SubscriptionDirective.REQUEST) {
+                listener.onSubscription(subscriptionRequest);
             }
         }
     }
