@@ -16,8 +16,8 @@ import reactor.netty.tcp.TcpServer;
 
 import java.net.InetSocketAddress;
 @Configuration
-//@Profile("!manualrsockserver")
-@Profile("!manualrsockserver & !nimrod-rmi-client")
+@Profile("!manualrsockserver")
+//@Profile("!manualrsockserver & !nimrod-rmi-client")
 public class DefaultRsocketServer implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultRsocketServer.class);

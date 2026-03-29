@@ -88,8 +88,9 @@ public class NimrodRmiProcessor extends AbstractProcessor {
                 .addModifiers(Modifier.PUBLIC)
                 .addAnnotation(Controller.class)
                 .addAnnotation(AnnotationSpec.builder(
-                                ClassName.get("org.springframework.context.annotation", "Profile"))
-                        .addMember("value", "{$S,$S}", "nimrod-rmi-server", "default")
+                                ClassName.get("org.springframework.context.annotation", "Conditional"))
+                        .addMember("value", "$T.class",
+                                ClassName.get("com.nimrodtechs.ipcrsock.spring", "NimrodServerEnabledCondition"))
                         .build())
                 .addJavadoc("Auto-generated controller for $L", ifaceName);
 
@@ -276,12 +277,13 @@ public class NimrodRmiProcessor extends AbstractProcessor {
                 .addJavadoc("Auto-generated RMI client proxy for $L", ifaceName)
                 .addAnnotation(ClassName.get("org.springframework.stereotype", "Service"))
                 .addAnnotation(AnnotationSpec.builder(
-                                ClassName.get("org.springframework.context.annotation", "Profile"))
-                        //.addMember("value", "{$S,$S}", "nimrod-rmi-client", "default")
-                        .addMember("value", "{$S}", "nimrod-rmi-client")
+                                ClassName.get("org.springframework.context.annotation", "Conditional"))
+                        .addMember("value", "$T.class",
+                                ClassName.get("com.nimrodtechs.ipcrsock.spring", "NimrodClientEnabledCondition"))
                         .build())
                 .addField(ClassName.get("com.nimrodtechs.ipcrsock.client", "RemoteServerService"),
                         "remoteServerService", Modifier.PRIVATE, Modifier.FINAL);
+
 
         // Hard-code serviceName from the annotation
         proxy.addField(FieldSpec.builder(String.class, "serviceName", Modifier.PRIVATE, Modifier.FINAL)

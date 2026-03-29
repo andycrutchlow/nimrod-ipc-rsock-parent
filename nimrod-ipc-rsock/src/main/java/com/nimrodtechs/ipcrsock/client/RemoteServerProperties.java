@@ -9,23 +9,21 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.Map;
 @Component
-@ConfigurationProperties(prefix = "nimrod.rsock.server")
+@ConfigurationProperties(prefix = "nimrod.rsock")
 public class RemoteServerProperties {
-    private Map<String, RemoteServerInfo> servers = new LinkedHashMap<>();
 
-    public RemoteServerProperties() {
+    private Map<String, RemoteServerInfo> clientSide = new LinkedHashMap<>();
+
+    public Map<String, RemoteServerInfo> getClientSide() {
+        return clientSide;
     }
 
-    public Map<String, RemoteServerInfo> getServers() {
-        return servers;
-    }
-
-    public void setServers(Map<String, RemoteServerInfo> servers) {
-        this.servers = servers;
+    public void setClientSide(Map<String, RemoteServerInfo> clientSide) {
+        this.clientSide = clientSide;
     }
 
     @PostConstruct
     void applyNames() {
-        servers.forEach((name, info) -> info.setName(name));
+        clientSide.forEach((name, info) -> info.setName(name));
     }
 }

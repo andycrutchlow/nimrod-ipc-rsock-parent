@@ -22,7 +22,7 @@ import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Profile({"nimrod-rmi-client","default"})
+//@Profile({"nimrod-rmi-client","default"})
 @Service
 public class RemoteServerService {
     private static final Logger log = LoggerFactory.getLogger(RemoteServerService.class);
@@ -46,7 +46,7 @@ public class RemoteServerService {
     @PostConstruct
     void init() throws Exception {
         //For each server found in remoteServerInfoMap set up a connection pool
-        for (RemoteServerInfo remoteServerInfo : remoteServerInfoMap.getServers().values()) {
+        for (RemoteServerInfo remoteServerInfo : remoteServerInfoMap.getClientSide().values()) {
             remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
         }
 
@@ -82,7 +82,7 @@ public class RemoteServerService {
      */
     public void addRemoteServer(RemoteServerInfo remoteServerInfo) throws Exception {
         remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
-        remoteServerInfoMap.getServers().put(remoteServerInfo.getName(), remoteServerInfo);
+        remoteServerInfoMap.getClientSide().put(remoteServerInfo.getName(), remoteServerInfo);
     }
 
     private GenericObjectPool<RSocketRequester> getConnectPool(RemoteServerInfo remoteServerInfo) throws Exception {
@@ -177,7 +177,7 @@ public class RemoteServerService {
 
 
     public <T> T executeRmiMethod(Class<T> responseClass, String serviceName, String methodName, Object... parameters) throws Exception {
-        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.getServers().get(serviceName);
+        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.getClientSide().get(serviceName);
         if(remoteServerInfo == null) {
             throw new NimrodRmiException(serviceName+" is not a registered Remote Server");
         }
@@ -208,15 +208,17 @@ public class RemoteServerService {
         } catch (Exception ex) {
             throw ex;
         } finally {
-            remoteServerInfo.connectionPool.returnObject(rsReq);
-            if(resetConnectionPool.get()){
+            if (rsReq != null) {
+                remoteServerInfo.connectionPool.returnObject(rsReq);
+            }
+            if (resetConnectionPool.get()) {
                 remoteServerInfo.connectionPool.clear();
             }
         }
     }
 
     public void fireAndForget(String serviceName, String methodName, Object... parameters) throws Exception {
-        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.getServers().get(serviceName);
+        RemoteServerInfo remoteServerInfo = remoteServerInfoMap.getClientSide().get(serviceName);
         if(remoteServerInfo == null) {
             throw new NimrodRmiException(serviceName+" is not a registered Remote Server");
         }
@@ -242,14 +244,16 @@ public class RemoteServerService {
         } catch (Exception ex) {
             throw ex;
         } finally {
-            remoteServerInfo.connectionPool.returnObject(rsReq);
-            if(resetConnectionPool.get()){
+            if (rsReq != null) {
+                remoteServerInfo.connectionPool.returnObject(rsReq);
+            }
+            if (resetConnectionPool.get()) {
                 remoteServerInfo.connectionPool.clear();
             }
         }
     }
 
     public boolean isServerConfigured(String serverName) {
-        return remoteServerInfoMap.getServers().get(serverName) != null;
+        return remoteServerInfoMap.getClientSide().get(serverName) != null;
     }
 }
