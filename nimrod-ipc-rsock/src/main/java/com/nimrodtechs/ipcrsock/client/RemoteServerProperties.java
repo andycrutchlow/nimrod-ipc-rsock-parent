@@ -8,14 +8,12 @@ import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-//@Profile({"nimrod-rmi-client","default"})
-//@EnableConfigurationProperties(RemoteServerProperties.class)
+@Component
 @ConfigurationProperties(prefix = "nimrod.rsock.server")
 public class RemoteServerProperties {
     private Map<String, RemoteServerInfo> servers = new LinkedHashMap<>();
 
     public RemoteServerProperties() {
-        System.out.println("HERE");
     }
 
     public Map<String, RemoteServerInfo> getServers() {

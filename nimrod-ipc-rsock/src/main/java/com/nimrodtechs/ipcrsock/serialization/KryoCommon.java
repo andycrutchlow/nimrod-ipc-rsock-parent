@@ -16,11 +16,17 @@ import java.util.concurrent.BlockingQueue;
 public class KryoCommon {
 
     private final BlockingQueue<KryoInfo> pool;
+    private final List<Class<?>> additionalClasses;
+    private final List<KryoCustomizer> customizers;
 
     public KryoCommon(
-            @Value("${nimrod.kryo.poolSize:16}") int poolSize
+            @Value("${nimrod.kryo.poolSize:16}") int poolSize,
+            KryoProperties kryoProperties,
+            List<KryoCustomizer> customizers // optional, can be empty
     ) {
         this.pool = new ArrayBlockingQueue<>(poolSize);
+        this.additionalClasses = kryoProperties.getAdditionalClasses();
+        this.customizers = (customizers != null) ? customizers : List.of();
 
         for (int i = 0; i < poolSize; i++) {
             pool.add(createKryoInfo());
@@ -58,6 +64,17 @@ public class KryoCommon {
         kryo.register(short[].class);
         kryo.register(byte[].class);
         kryo.register(TreeSet.class);
+
+        // --- SIMPLE additional registrations ---
+        if (additionalClasses != null && !additionalClasses.isEmpty()) {
+            for (Class<?> clazz : additionalClasses) {
+                kryo.register(clazz);
+            }
+        }
+        // --- advanced customizers ---
+        for (KryoCustomizer customizer : customizers) {
+            customizer.customize(kryo);
+        }
 
         ReusableByteArrayOutputStream outputStream =
                 new ReusableByteArrayOutputStream(KryoInfo.KRYO_INITIAL_DATA_SIZE);

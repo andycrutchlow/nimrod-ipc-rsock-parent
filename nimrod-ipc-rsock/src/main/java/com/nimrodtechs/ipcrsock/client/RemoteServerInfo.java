@@ -20,12 +20,12 @@ public class RemoteServerInfo {
 
     public RemoteServerInfo(){}
 
-//    public RemoteServerInfo(String name, String host, int port, int maxConcurrentCalls) {
-//        this.name = name;
-//        this.host = host;
-//        this.port = port;
-//        this.maxConcurrentCalls = maxConcurrentCalls;
-//    }
+    public RemoteServerInfo(String name, String host, int port, int maxConcurrentCalls) {
+        this.name = name;
+        this.host = host;
+        this.port = port;
+        this.maxConcurrentCalls = maxConcurrentCalls;
+    }
 
     public String getName() {
         return name;

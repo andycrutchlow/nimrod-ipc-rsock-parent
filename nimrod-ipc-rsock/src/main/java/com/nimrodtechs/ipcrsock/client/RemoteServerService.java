@@ -80,10 +80,10 @@ public class RemoteServerService {
      * @param remoteServerInfo
      * @throws Exception
      */
-//    public void addRemoteServer(RemoteServerInfo remoteServerInfo) throws Exception {
-//        remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
-//        remoteServerInfoMap.put(remoteServerInfo.getName(), remoteServerInfo);
-//    }
+    public void addRemoteServer(RemoteServerInfo remoteServerInfo) throws Exception {
+        remoteServerInfo.setConnectionPool(getConnectPool(remoteServerInfo));
+        remoteServerInfoMap.getServers().put(remoteServerInfo.getName(), remoteServerInfo);
+    }
 
     private GenericObjectPool<RSocketRequester> getConnectPool(RemoteServerInfo remoteServerInfo) throws Exception {
         GenericObjectPoolConfig poolConfig = new GenericObjectPoolConfig();
