@@ -22,7 +22,6 @@ import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-//@Profile({"nimrod-rmi-client","default"})
 @Service
 public class RemoteServerService {
     private static final Logger log = LoggerFactory.getLogger(RemoteServerService.class);

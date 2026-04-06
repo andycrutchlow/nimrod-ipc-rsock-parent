@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.rsocket.annotation.support.RSocketMessageHandler;
 
 @Configuration
-//@Profile("!manualrsockserver & !nimrod-rmi-client")
 @ComponentScan(basePackages = {"com.nimrodtechs.ipcrsock.common","com.nimrodtechs.ipcrsock.serialization"})
 public class DefaultRsocketServerConfig {
 
