@@ -130,7 +130,7 @@ public class SubscriberService {
     }
 
     private static final Pattern SUBJECT_PATTERN =
-            Pattern.compile("^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)*(\\.\\*)?$");
+            Pattern.compile("^[a-zA-Z0-9_:-]+(->[a-zA-Z0-9_:-]+)?(\\.[a-zA-Z0-9_:-]+)*(\\.\\*)?$");
 
     private void validateSubject(String subject) throws NimrodPubSubException {
         if (!SUBJECT_PATTERN.matcher(subject).matches()) {

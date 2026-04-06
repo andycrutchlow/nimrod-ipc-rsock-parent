@@ -339,11 +339,15 @@ public class PublisherSocketImpl implements SocketAcceptor {
      */
     public void publish(String subject, Object data) {
         if (publisherPort == -1) {
-            log.warn("publish called subject={} class={} but no nimrod.rsock.publisher.port configured - IGNORED",
+            log.warn("publish called with subject={} class={} but no nimrod.rsock.publisher.port configured - IGNORED",
                     subject, data.getClass().getSimpleName());
             return;
         }
-
+        if(subject == null || subject.isEmpty() || subject.charAt(subject.length() - 1) == '*') {
+            log.warn("publish called with subject[{}] but subject fails validation - IGNORED",
+                    subject);
+            return;
+        }
         if (logLevel > 0) {
             log.info("PUBLISH:[{}]:[{}]", subject, data);
         }

@@ -24,6 +24,8 @@ public class RemoteServerProperties {
 
     @PostConstruct
     void applyNames() {
-        clientSide.forEach((name, info) -> info.setName(name));
+        clientSide.forEach((name, info) -> {
+            info.setName(name);
+        });
     }
 }
