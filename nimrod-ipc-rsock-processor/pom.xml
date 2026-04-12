@@ -7,9 +7,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.nimrodtechs</groupId>
+        <groupId>io.github.andycrutchlow</groupId>
         <artifactId>nimrod-ipc-rsock-parent</artifactId>
-        <version>4.2-SNAPSHOT</version>
+        <version>4.3-SNAPSHOT</version>
     </parent>
 
     <artifactId>nimrod-ipc-rsock-processor</artifactId>
