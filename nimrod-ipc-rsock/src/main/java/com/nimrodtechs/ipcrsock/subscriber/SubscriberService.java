@@ -39,6 +39,8 @@ public class SubscriberService {
     @Autowired
     RSocketStrategies rSocketStrategies;
 
+    // Guards lifecycle state only. Message dispatch continues using concurrent maps/list snapshots.
+    private final Object lifecycleLock = new Object();
     private final Map<String, SubscriberConnectionInfo> subscriberInfoMap = new HashMap<>();
 
     Map<String, SubscriptionInfo> clientSubscriptions = new HashMap<>();
@@ -48,6 +50,7 @@ public class SubscriberService {
         Class<T> payloadClass;
         SubscriptionRequest originalSubscriptionRequest;
         Disposable disposable;
+        Object streamAttempt;
 
         public SubscriptionInfo(String subject, Class<T> payloadClass, SubscriptionRequest originalSubscriptionRequest) {
             this.subject = subject;
@@ -191,10 +194,16 @@ public class SubscriberService {
         SubscriptionInfo<T> subscriptionInfo =
                 new SubscriptionInfo<>(subject, payloadClass, subscriptionRequest);
 
-        subscriptionInfo.setDisposable(establishFlux(subscriberConnectionInfo, subscriptionInfo));
         clientSubscriptions.put(publisherName + ":" + subject, subscriptionInfo);
-
         subscriberConnectionInfo.upstreamActiveSubjects.add(subject);
+        try {
+            installFlux(subscriberConnectionInfo, subscriptionInfo);
+        } catch (RuntimeException ex) {
+            retireSubscription(subscriptionInfo);
+            clientSubscriptions.remove(publisherName + ":" + subject, subscriptionInfo);
+            subscriberConnectionInfo.upstreamActiveSubjects.remove(subject);
+            throw ex;
+        }
 
         log.info("SUBSCRIBED TO:{} subject[{}]", publisherName, subject);
     }
@@ -210,26 +219,27 @@ public class SubscriberService {
 
         SubscriptionInfo subscriptionInfo =
                 clientSubscriptions.remove(publisherName + ":" + subject);
-
-        if (subscriptionInfo != null && subscriptionInfo.getDisposable() != null) {
-            subscriptionInfo.getDisposable().dispose();
+        subscriberConnectionInfo.upstreamActiveSubjects.remove(subject);
+        if (subscriptionInfo != null) {
+            retireSubscription(subscriptionInfo);
         }
 
-        RSocketRequester.RequestSpec requestSpec =
-                subscriberConnectionInfo.getRSocketRequester().route(publisherName);
+        try {
+            RSocketRequester.RequestSpec requestSpec =
+                    subscriberConnectionInfo.getRSocketRequester().route(publisherName);
 
-        requestSpec.data(
-                        new SubscriptionRequest(
-                                SubscriptionDirective.CANCEL,
-                                subscriberProcessName,
-                                subject
-                        )
-                )
-                .send()
-                .doOnError(e -> log.error("Failed sending CANCEL for {} {}", publisherName, subject, e))
-                .subscribe();
-
-        subscriberConnectionInfo.upstreamActiveSubjects.remove(subject);
+            requestSpec.data(
+                            new SubscriptionRequest(
+                                    SubscriptionDirective.CANCEL,
+                                    subscriberProcessName,
+                                    subject
+                            )
+                    )
+                    .send()
+                    .subscribe(null, e -> log.error("Failed sending CANCEL for {} {}", publisherName, subject, e));
+        } catch (RuntimeException ex) {
+            log.error("Failed sending CANCEL for {} {}", publisherName, subject, ex);
+        }
 
         log.info("UNSUBSCRIBE FROM:{} subject[{}]", publisherName, subject);
     }
@@ -317,65 +327,142 @@ public class SubscriberService {
                     (Class<Object>) sub.payloadClass
             );
         }
+        if (sci.upstreamActiveSubjects.isEmpty()) {
+            cancelRecovery(sci);
+        }
+    }
+
+    // Called with lifecycleLock held. Invalidate callbacks before cancelling their stream.
+    private void retireSubscription(SubscriptionInfo subscriptionInfo) {
+        subscriptionInfo.streamAttempt = null;
+        Disposable disposable = subscriptionInfo.getDisposable();
+        subscriptionInfo.setDisposable(null);
+        disposeSafely(disposable);
+    }
+
+    private void disposeSafely(Disposable disposable) {
+        if (disposable != null) {
+            try {
+                disposable.dispose();
+            } catch (RuntimeException ex) {
+                log.warn("Failed disposing subscriber resource", ex);
+            }
+        }
+    }
+
+    // Subscribe and retain its handle in the same lifecycle transaction as unsubscribe.
+    private void installFlux(SubscriberConnectionInfo sci, SubscriptionInfo subscriptionInfo) {
+        Object attempt = new Object();
+        subscriptionInfo.streamAttempt = attempt;
+        Disposable disposable = establishFlux(sci, subscriptionInfo, sci.getRSocketRequester(), attempt);
+        // Also defend against synchronous, reentrant lifecycle changes during subscription setup.
+        if (subscriberInfoMap.get(sci.getName()) == sci
+                && clientSubscriptions.get(sci.getName() + ":" + subscriptionInfo.subject) == subscriptionInfo
+                && subscriptionInfo.streamAttempt == attempt) {
+            subscriptionInfo.setDisposable(disposable);
+        } else {
+            disposeSafely(disposable);
+        }
+    }
+
+    private void cancelRecovery(SubscriberConnectionInfo sci) {
+        TimerTask task = sci.reSubscribeTimerTask;
+        sci.reSubscribeTimerTask = null;
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
+    private void scheduleRecovery(SubscriberConnectionInfo sci) {
+        if (subscriberInfoMap.get(sci.getName()) != sci
+                || sci.upstreamActiveSubjects.isEmpty()
+                || sci.reSubscribeTimerTask != null) {
+            return;
+        }
+        ReSubscribeTask task = new ReSubscribeTask(sci);
+        sci.reSubscribeTimerTask = task;
+        try {
+            sci.reSubscribeTimer.schedule(task, 2000);
+        } catch (RuntimeException ex) {
+            if (sci.reSubscribeTimerTask == task) {
+                sci.reSubscribeTimerTask = null;
+            }
+            task.cancel();
+            log.error("Failed scheduling recovery for publisher {}", sci.getName(), ex);
+        }
     }
 
     class ReSubscribeTask extends TimerTask {
 
         private final SubscriberConnectionInfo subscriberConnectionInfo;
-        private final Map<String, SubscriptionInfo> clientSubscriptions;
-
-        public ReSubscribeTask(
-                SubscriberConnectionInfo subscriberConnectionInfo,
-                Map<String, SubscriptionInfo> clientSubscriptions
-        ) {
+        public ReSubscribeTask(SubscriberConnectionInfo subscriberConnectionInfo) {
             this.subscriberConnectionInfo = subscriberConnectionInfo;
-            this.clientSubscriptions = clientSubscriptions;
+        }
+
+        private boolean ownsRecovery() {
+            return subscriberInfoMap.get(subscriberConnectionInfo.getName()) == subscriberConnectionInfo
+                    && subscriberConnectionInfo.reSubscribeTimerTask == this
+                    && !subscriberConnectionInfo.upstreamActiveSubjects.isEmpty();
         }
 
         @Override
         public void run() {
 
-            StringBuilder sb = new StringBuilder();
-
-            for (String subject : subscriberConnectionInfo.upstreamActiveSubjects) {
-                if (sb.length() > 0) {
-                    sb.append(",");
-                }
-                sb.append(subject);
-            }
-
-            log.info(
-                    "Try to resubscribe on publisher [{}] subscriptions [{}]",
-                    subscriberConnectionInfo.getName(),
-                    sb.toString()
-            );
-
-            if (subscriberConnectionInfo.getRSocketRequester() != null) {
-                subscriberConnectionInfo.getRSocketRequester().dispose();
-            }
-
-            subscriberConnectionInfo.setrSocketRequester(
-                    getRSocketRequester(subscriberConnectionInfo)
-            );
-
-            for (String subject : subscriberConnectionInfo.upstreamActiveSubjects) {
-                String fullKey = subscriberConnectionInfo.getName() + ":" + subject;
-                SubscriptionInfo subscriptionInfo = clientSubscriptions.get(fullKey);
-
-                if (subscriptionInfo != null) {
-                    if (subscriptionInfo.getDisposable() != null && !subscriptionInfo.getDisposable().isDisposed()) {
-                        subscriptionInfo.getDisposable().dispose();
+            RSocketRequester candidate = null;
+            RSocketRequester previous = null;
+            boolean retry = false;
+            try {
+                synchronized (lifecycleLock) {
+                    if (!ownsRecovery()) {
+                        return;
                     }
-
-                    Disposable disposable =
-                            establishFlux(subscriberConnectionInfo, subscriptionInfo);
-
-                    subscriptionInfo.setDisposable(disposable);
+                    log.info("Try to resubscribe on publisher [{}] subscriptions [{}]",
+                            subscriberConnectionInfo.getName(),
+                            String.join(",", subscriberConnectionInfo.upstreamActiveSubjects));
                 }
-            }
 
-            subscriberConnectionInfo.reSubscribeTimerTask.cancel();
-            subscriberConnectionInfo.reSubscribeTimerTask = null;
+                // Requester construction is lazy, but keep it outside the shared lifecycle lock.
+                candidate = getRSocketRequester(subscriberConnectionInfo);
+
+                synchronized (lifecycleLock) {
+                    if (!ownsRecovery()) {
+                        return;
+                    }
+                    previous = subscriberConnectionInfo.getRSocketRequester();
+                    subscriberConnectionInfo.setrSocketRequester(candidate);
+                    candidate = null;
+
+                    // Retire all old attempts before installing any replacement streams.
+                    for (String subject : subscriberConnectionInfo.upstreamActiveSubjects) {
+                        SubscriptionInfo subscriptionInfo = clientSubscriptions.get(
+                                subscriberConnectionInfo.getName() + ":" + subject);
+                        if (subscriptionInfo != null) {
+                            retireSubscription(subscriptionInfo);
+                        }
+                    }
+                    for (String subject : subscriberConnectionInfo.upstreamActiveSubjects) {
+                        SubscriptionInfo subscriptionInfo = clientSubscriptions.get(
+                                subscriberConnectionInfo.getName() + ":" + subject);
+                        if (subscriptionInfo != null) {
+                            installFlux(subscriberConnectionInfo, subscriptionInfo);
+                        }
+                    }
+                }
+            } catch (RuntimeException ex) {
+                retry = true;
+                log.error("Failed resubscribing on publisher {}", subscriberConnectionInfo.getName(), ex);
+            } finally {
+                synchronized (lifecycleLock) {
+                    if (subscriberConnectionInfo.reSubscribeTimerTask == this) {
+                        subscriberConnectionInfo.reSubscribeTimerTask = null;
+                        if (retry) {
+                            scheduleRecovery(subscriberConnectionInfo);
+                        }
+                    }
+                }
+                disposeSafely(candidate);
+                disposeSafely(previous);
+            }
         }
     }
 
@@ -387,46 +474,76 @@ public class SubscriberService {
             return;
         }
 
-        if (subscriberProcessNameOverride != null) {
-            subscriberProcessName = subscriberProcessNameOverride;
-        }
+        String processName;
+        synchronized (lifecycleLock) {
+            if (subscriberProcessNameOverride != null) {
+                subscriberProcessName = subscriberProcessNameOverride;
+            }
 
-        if (subscriberProcessName == null) {
-            log.error("If subscriberProperties are provided then property or VM param spring.application.name must be supplied");
-            throw new NimrodPubSubException(
-                    "If subscriberProperties are provided then property or VM param spring.application.name must be supplied"
-            );
+            if (subscriberProcessName == null) {
+                log.error("If subscriberProperties are provided then property or VM param spring.application.name must be supplied");
+                throw new NimrodPubSubException(
+                        "If subscriberProperties are provided then property or VM param spring.application.name must be supplied"
+                );
+            }
+            //Need to ensure the resulting subscriberProcessName is unique across all subscribers, even if they have the same logical name e.g. pod replicas
+            subscriberProcessName = subscriberProcessName + "-" + UUID.randomUUID().toString();
+            log.info("subscriberProcessName={}", subscriberProcessName);
+            processName = subscriberProcessName;
         }
-        //Need to ensure the resulting subscriberProcessName is unique across all subscribers, even if they have the same logical name e.g. pod replicas
-        subscriberProcessName = subscriberProcessName + "-" + UUID.randomUUID().toString();
-        log.info("subscriberProcessName={}", subscriberProcessName);
 
         for (String subscriberInfoItems : subscriberProperties.getSetup()) {
             String[] items = subscriberInfoItems.split(",");
-            addSubscriberSocket(subscriberProcessName, items[0], items[1], Integer.valueOf(items[2]));
+            addSubscriberSocket(processName, items[0], items[1], Integer.valueOf(items[2]));
         }
     }
 
     @PreDestroy
     void destroy() {
-        log.info("Shutdown : subscriberInfoMap size={}", subscriberInfoMap.size());
+        synchronized (lifecycleLock) {
+            log.info("Shutdown : subscriberInfoMap size={}", subscriberInfoMap.size());
+        }
     }
 
     public void addSubscriberSocket(String subscriberNameOnDemand, String name, String host, int port) throws NimrodPubSubException {
-        SubscriberConnectionInfo subscriberConnectionInfo = new SubscriberConnectionInfo(name, host, port);
-
-        if (subscriberProcessName == null) {
-            subscriberProcessName = subscriberNameOnDemand;
-        } else {
-            if (!subscriberProcessName.equals(subscriberNameOnDemand)) {
-                throw new NimrodPubSubException(
-                        "You cannot change subscriberProcessName[" + subscriberProcessName + "] to [" + subscriberNameOnDemand + "]"
-                );
+        synchronized (lifecycleLock) {
+            if (subscriberProcessName == null) {
+                subscriberProcessName = subscriberNameOnDemand;
+            } else {
+                if (!subscriberProcessName.equals(subscriberNameOnDemand)) {
+                    throw new NimrodPubSubException(
+                            "You cannot change subscriberProcessName[" + subscriberProcessName + "] to [" + subscriberNameOnDemand + "]"
+                    );
+                }
             }
         }
 
-        subscriberConnectionInfo.setrSocketRequester(getRSocketRequester(subscriberConnectionInfo));
-        subscriberInfoMap.put(subscriberConnectionInfo.getName(), subscriberConnectionInfo);
+        SubscriberConnectionInfo subscriberConnectionInfo = new SubscriberConnectionInfo(name, host, port);
+        RSocketRequester requester;
+        try {
+            requester = getRSocketRequester(subscriberConnectionInfo);
+        } catch (RuntimeException ex) {
+            subscriberConnectionInfo.reSubscribeTimer.cancel();
+            throw ex;
+        }
+        RSocketRequester previous = null;
+        synchronized (lifecycleLock) {
+            subscriberConnectionInfo.setrSocketRequester(requester);
+            SubscriberConnectionInfo old = subscriberInfoMap.put(name, subscriberConnectionInfo);
+            if (old != null) {
+                cancelRecovery(old);
+                old.reSubscribeTimer.cancel();
+                for (String subject : old.upstreamActiveSubjects) {
+                    SubscriptionInfo subscriptionInfo = clientSubscriptions.remove(name + ":" + subject);
+                    if (subscriptionInfo != null) {
+                        retireSubscription(subscriptionInfo);
+                    }
+                }
+                old.upstreamActiveSubjects.clear();
+                previous = old.getRSocketRequester();
+            }
+        }
+        disposeSafely(previous);
     }
 
     private RSocketRequester getRSocketRequester(SubscriberConnectionInfo subscriberConnectionInfo) {
@@ -463,66 +580,70 @@ public class SubscriberService {
             Class<T> payloadClass,
             boolean conflate
     ) throws NimrodPubSubException {
-
-        SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
-        if (subscriberConnectionInfo == null) {
-            throw new NimrodPubSubException(
-                    publisherName + " is not a valid publisher to send subscribe " + aSubject + " to"
-            );
-        }
-
-        validateSubject(aSubject);
-
-        boolean wildcard = aSubject.endsWith("*");
-
-        LocalSubscription localSubscription =
-                getOrCreateLocalSubscription(subscriberConnectionInfo, aSubject, wildcard);
-
-        if (localSubscription.listeners.stream().anyMatch(entry -> entry.messageReceiver == listener)) {
-            log.info("{} subject[{}] listener {} already present : IGNORE", publisherName, aSubject, listener);
-            return;
-        }
-
-        if (!localSubscription.listeners.isEmpty()) {
-            QueueExecutor existingExecutor = localSubscription.listeners.get(0).queueExecutor;
-
-            boolean sameType =
-                    (existingExecutor instanceof ConflatingExecutor && conflate)
-                            || (existingExecutor instanceof SequentialExecutor && !conflate);
-
-            if (!sameType) {
-                log.info(
-                        "{} subject[{}] adding another listener BUT cannot have different type of QueueExecutor : IGNORE",
-                        publisherName, aSubject
+        synchronized (lifecycleLock) {
+            SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
+            if (subscriberConnectionInfo == null) {
+                throw new NimrodPubSubException(
+                        publisherName + " is not a valid publisher to send subscribe " + aSubject + " to"
                 );
+            }
+
+            validateSubject(aSubject);
+
+            boolean wildcard = aSubject.endsWith("*");
+
+            LocalSubscription localSubscription =
+                    getOrCreateLocalSubscription(subscriberConnectionInfo, aSubject, wildcard);
+
+            if (localSubscription.listeners.stream().anyMatch(entry -> entry.messageReceiver == listener)) {
+                log.info("{} subject[{}] listener {} already present : IGNORE", publisherName, aSubject, listener);
                 return;
             }
+
+            if (!localSubscription.listeners.isEmpty()) {
+                QueueExecutor existingExecutor = localSubscription.listeners.get(0).queueExecutor;
+
+                boolean sameType =
+                        (existingExecutor instanceof ConflatingExecutor && conflate)
+                                || (existingExecutor instanceof SequentialExecutor && !conflate);
+
+                if (!sameType) {
+                    log.info(
+                            "{} subject[{}] adding another listener BUT cannot have different type of QueueExecutor : IGNORE",
+                            publisherName, aSubject
+                    );
+                    return;
+                }
+            }
+
+            MessageProcessorEntry messageProcessorEntry =
+                    new MessageProcessorEntry(
+                            listener,
+                            conflate ? subscriberConnectionInfo.conflatingQueueExecutor
+                                    : subscriberConnectionInfo.sequentialQueueExecutor
+                    );
+
+            localSubscription.listeners.add(messageProcessorEntry);
+            localSubscription.payloadClass = payloadClass;
+
+            recomputeUpstreamSubscriptions(publisherName);
+
+            log.info(
+                    "ADDED listener for Subject[{}] listener[{}] DispatcherType:{}",
+                    aSubject,
+                    listener,
+                    conflate ? "conflate" : "sequential"
+            );
+
         }
-
-        MessageProcessorEntry messageProcessorEntry =
-                new MessageProcessorEntry(
-                        listener,
-                        conflate ? subscriberConnectionInfo.conflatingQueueExecutor
-                                : subscriberConnectionInfo.sequentialQueueExecutor
-                );
-
-        localSubscription.listeners.add(messageProcessorEntry);
-        localSubscription.payloadClass = payloadClass;
-
-        recomputeUpstreamSubscriptions(publisherName);
-
-        log.info(
-                "ADDED listener for Subject[{}] listener[{}] DispatcherType:{}",
-                aSubject,
-                listener,
-                conflate ? "conflate" : "sequential"
-        );
     }
 
-    private Disposable establishFlux(SubscriberConnectionInfo subscriberConnectionInfo, SubscriptionInfo subscriptionInfo) {
+    private Disposable establishFlux(SubscriberConnectionInfo subscriberConnectionInfo,
+                                     SubscriptionInfo subscriptionInfo,
+                                     RSocketRequester requester, Object attempt) {
 
         RSocketRequester.RequestSpec requestSpec =
-                subscriberConnectionInfo.getRSocketRequester().route(subscriberConnectionInfo.getName());
+                requester.route(subscriberConnectionInfo.getName());
 
         Flux<PublisherPayload> flux = requestSpec
                 .data(subscriptionInfo.originalSubscriptionRequest)
@@ -543,8 +664,9 @@ public class SubscriberService {
                 },
                 error -> {
                     handleFluxError(
-                            subscriberConnectionInfo.getName(),
-                            subscriptionInfo.originalSubscriptionRequest,
+                            subscriberConnectionInfo,
+                            subscriptionInfo,
+                            attempt,
                             error
                     );
                 },
@@ -563,28 +685,34 @@ public class SubscriberService {
         log.info("{} subject[{}] has closed gracefully", publisherName, subscriptionRequest.getSubject());
     }
 
-    private void handleFluxError(String publisherName, SubscriptionRequest subscriptionRequest, Object error) {
-        log.info("{} subject[{}] ERROR : {}", publisherName, subscriptionRequest.getSubject(), error);
+    private void handleFluxError(SubscriberConnectionInfo sci, SubscriptionInfo subscriptionInfo,
+                                 Object attempt, Throwable error) {
+        log.info("{} subject[{}] ERROR : {}", sci.getName(), subscriptionInfo.subject, error);
 
         if (error instanceof ClosedChannelException
                 || error.getClass().getName().equals("reactor.core.Exceptions$RetryExhaustedException")) {
 
-            SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
-            if (subscriberConnectionInfo == null) {
-                return;
-            }
-            //Start a timer task that loops trying to re-establish a good connection to the publisher and re-subscribe to any existing subscriptions found
-            if (!subscriberConnectionInfo.subjectListeners.isEmpty()
-                    || !subscriberConnectionInfo.wildcardListeners.isEmpty()) {
-
-                if (subscriberConnectionInfo.reSubscribeTimerTask == null) {
-                    subscriberConnectionInfo.reSubscribeTimerTask =
-                            new ReSubscribeTask(subscriberConnectionInfo, clientSubscriptions);
-                    subscriberConnectionInfo.reSubscribeTimer.schedule(
-                            subscriberConnectionInfo.reSubscribeTimerTask,
-                            2000
-                    );
-                }
+            // Never acquire lifecycleLock on a Reactor callback thread. The same timer executes
+            // notifications after a running recovery finishes, including immediate replacement errors.
+            try {
+                sci.reSubscribeTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        synchronized (lifecycleLock) {
+                            if (subscriberInfoMap.get(sci.getName()) == sci
+                                    && clientSubscriptions.get(sci.getName() + ":" + subscriptionInfo.subject)
+                                    == subscriptionInfo
+                                    && subscriptionInfo.streamAttempt == attempt) {
+                                scheduleRecovery(sci);
+                            } else {
+                                log.debug("Ignoring obsolete stream error for {} {}",
+                                        sci.getName(), subscriptionInfo.subject);
+                            }
+                        }
+                    }
+                }, 0);
+            } catch (RuntimeException ex) {
+                log.warn("Failed queueing recovery notification for publisher {}", sci.getName(), ex);
             }
         }
     }
@@ -594,58 +722,60 @@ public class SubscriberService {
      * Then recompute the minimal upstream subscription set.
      */
     public <T> void unsubscribe(String publisherName, String aSubject, MessageReceiverInterface<T> listener) {
-
-        SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
-        if (subscriberConnectionInfo == null) {
-            log.error("{} is not a valid publisher to send unsubscribe {} to", publisherName, aSubject);
-            return;
-        }
-
-        boolean wildcard = aSubject.endsWith("*");
-
-        LocalSubscription localSubscription =
-                wildcard
-                        ? subscriberConnectionInfo.wildcardListeners.get(aSubject.replace("*", ""))
-                        : subscriberConnectionInfo.subjectListeners.get(aSubject);
-
-        if (localSubscription == null) {
-            log.info("{} subject[{}] does not exist as a current subscription : IGNORE", publisherName, aSubject);
-            return;
-        }
-
-        // find listener
-        MessageProcessorEntry messageProcessorEntry =
-                localSubscription.listeners.stream()
-                        .filter(entry -> entry.messageReceiver == listener)
-                        .findFirst()
-                        .orElse(null);
-
-        if (messageProcessorEntry == null) {
-            log.info("{} subject[{}] listener not found : IGNORE", publisherName, aSubject);
-            return;
-        }
-
-        // remove listener
-        localSubscription.listeners.remove(messageProcessorEntry);
-
-        log.info(
-                "REMOVED LISTENER:{} from {} subject[{}] remaining count={}",
-                listener.getClass().getSimpleName(),
-                publisherName,
-                aSubject,
-                localSubscription.listeners.size()
-        );
-
-        // if no listeners remain
-        if (localSubscription.listeners.isEmpty()) {
-            if (wildcard) {
-                subscriberConnectionInfo.wildcardListeners.remove(aSubject.replace("*", ""));
-            } else {
-                subscriberConnectionInfo.subjectListeners.remove(aSubject);
+        synchronized (lifecycleLock) {
+            SubscriberConnectionInfo subscriberConnectionInfo = subscriberInfoMap.get(publisherName);
+            if (subscriberConnectionInfo == null) {
+                log.error("{} is not a valid publisher to send unsubscribe {} to", publisherName, aSubject);
+                return;
             }
-        }
 
-        recomputeUpstreamSubscriptions(publisherName);
+            boolean wildcard = aSubject.endsWith("*");
+
+            LocalSubscription localSubscription =
+                    wildcard
+                            ? subscriberConnectionInfo.wildcardListeners.get(aSubject.replace("*", ""))
+                            : subscriberConnectionInfo.subjectListeners.get(aSubject);
+
+            if (localSubscription == null) {
+                log.info("{} subject[{}] does not exist as a current subscription : IGNORE", publisherName, aSubject);
+                return;
+            }
+
+            // find listener
+            MessageProcessorEntry messageProcessorEntry =
+                    localSubscription.listeners.stream()
+                            .filter(entry -> entry.messageReceiver == listener)
+                            .findFirst()
+                            .orElse(null);
+
+            if (messageProcessorEntry == null) {
+                log.info("{} subject[{}] listener not found : IGNORE", publisherName, aSubject);
+                return;
+            }
+
+            // remove listener
+            localSubscription.listeners.remove(messageProcessorEntry);
+
+            log.info(
+                    "REMOVED LISTENER:{} from {} subject[{}] remaining count={}",
+                    listener.getClass().getSimpleName(),
+                    publisherName,
+                    aSubject,
+                    localSubscription.listeners.size()
+            );
+
+            // if no listeners remain
+            if (localSubscription.listeners.isEmpty()) {
+                if (wildcard) {
+                    subscriberConnectionInfo.wildcardListeners.remove(aSubject.replace("*", ""));
+                } else {
+                    subscriberConnectionInfo.subjectListeners.remove(aSubject);
+                }
+            }
+
+            recomputeUpstreamSubscriptions(publisherName);
+
+        }
     }
 
     private <T> void dispatchMessage(
