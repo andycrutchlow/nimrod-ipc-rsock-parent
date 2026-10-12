@@ -6,7 +6,7 @@
 
     <groupId>io.github.andycrutchlow</groupId>
     <artifactId>nimrod-ipc-rsock-parent</artifactId>
-    <version>4.3.0</version>
+    <version>4.3.1-SNAPSHOT</version>
     <packaging>pom</packaging>
     <modules>
         <module>nimrod-ipc-rsock</module>
