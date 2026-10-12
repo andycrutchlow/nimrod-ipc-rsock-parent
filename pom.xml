@@ -6,7 +6,7 @@
 
     <groupId>io.github.andycrutchlow</groupId>
     <artifactId>nimrod-ipc-rsock-parent</artifactId>
-    <version>4.3-SNAPSHOT</version>
+    <version>4.3.0</version>
     <packaging>pom</packaging>
     <modules>
         <module>nimrod-ipc-rsock</module>
@@ -71,11 +71,15 @@
     This is intentional to avoid GitHub package coordinate conflicts.
     -->
     <distributionManagement>
-        <repository>
+        <snapshotRepository>
             <id>github</id>
             <name>GitHub andycrutchlow Apache Maven Packages</name>
             <url>https://maven.pkg.github.com/andycrutchlow/nimrod-ipc-rsock</url>
-        </repository>
+        </snapshotRepository>
+<!--        <repository>-->
+<!--            <id>central</id>-->
+<!--            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>-->
+<!--        </repository>-->
     </distributionManagement>
 
     <build>
@@ -92,7 +96,83 @@
                     <testRelease>21</testRelease>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.4.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>central</publishingServerId>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.3.0</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.6.3</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
+<!--
+MAVEN STUFF
+-->
+    <name>Nimrod IPC RSock</name>
+    <description>Low-latency RSocket-based IPC framework</description>
+    <url>https://github.com/andycrutchlow/nimrod-ipc-rsock-parent</url>
+
+    <licenses>
+        <license>
+            <name>The Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Andrew Crutchlow</name>
+            <email>andycrutchlow@gmail.com</email>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/andycrutchlow/nimrod-ipc-rsock-parent.git</connection>
+        <developerConnection>scm:git:ssh://github.com/andycrutchlow/nimrod-ipc-rsock-parent.git</developerConnection>
+        <url>https://github.com/andycrutchlow/nimrod-ipc-rsock-parent</url>
+    </scm>
 
 </project>

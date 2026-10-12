@@ -9,10 +9,11 @@
     <parent>
         <groupId>io.github.andycrutchlow</groupId>
         <artifactId>nimrod-ipc-rsock-parent</artifactId>
-        <version>4.3-SNAPSHOT</version>
+        <version>4.3.0</version>
     </parent>
 
     <artifactId>nimrod-ipc-rsock-processor</artifactId>
+    <name>Nimrod IPC RSock Annotation Processor</name>
     <packaging>jar</packaging>
 
     <properties>
@@ -27,7 +28,7 @@
 
         <!-- Public annotations API -->
         <dependency>
-            <groupId>com.nimrodtechs</groupId>
+            <groupId>io.github.andycrutchlow</groupId>
             <artifactId>nimrod-ipc-rsock-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
