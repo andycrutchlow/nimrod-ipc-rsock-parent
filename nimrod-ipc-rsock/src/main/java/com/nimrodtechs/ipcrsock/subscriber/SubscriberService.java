@@ -235,12 +235,17 @@ public class SubscriberService {
     }
 
     /**
-     * Recompute the minimal upstream subscription set from the local logical subscriptions.
+     * Recompute the minimal upstream subscription set from local subscriptions.
      *
      * Rules:
-     * - Every wildcard local subscription with listeners is desired upstream.
-     * - An exact subject local subscription is desired upstream only if it is NOT covered
-     *   by any wildcard local subscription with listeners.
+     * - Only the broadest necessary trailing-wildcard subscriptions
+     *   are maintained upstream.
+     * - Narrower wildcard subscriptions covered by broader wildcards
+     *   remain registered locally but are suppressed upstream.
+     * - Exact subscriptions covered by active local wildcards are
+     *   also suppressed upstream.
+     * - Removing broader coverage reactivates any uncovered narrower
+     *   wildcard or exact subscriptions.
      */
     @SuppressWarnings("unchecked")
     private void recomputeUpstreamSubscriptions(String publisherName) {
@@ -251,9 +256,17 @@ public class SubscriberService {
 
         Set<String> desired = new HashSet<>();
 
-        // 1. All wildcards with listeners are desired upstream
+        // 1. Only activate wildcards that are not covered by a broader wildcard.
         for (LocalSubscription sub : sci.wildcardListeners.values()) {
-            if (!sub.listeners.isEmpty()) {
+            if (sub.listeners.isEmpty()) {
+                continue;
+            }
+
+            boolean covered = sci.wildcardListeners.values().stream()
+                    .filter(w -> w != sub && !w.listeners.isEmpty())
+                    .anyMatch(w -> wildcardCovers(w.subject, sub.subject));
+
+            if (!covered) {
                 desired.add(sub.subject);
             }
         }

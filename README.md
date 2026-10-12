@@ -1,14 +1,18 @@
 # Nimrod IPC (RSocket)
 
-**Nimrod IPC** is a low-latency, point-to-point inter-process communication (IPC) library for JVM applications, built on **RSocket**, **Reactor**, and **Spring Framework**.
+**Nimrod IPC** is a low-latency inter-process communication (IPC) library for JVM applications, built on **RSocket**, **Project Reactor**, and **Spring Framework**.
 
-It is designed for systems that need:
-- predictable latency
-- explicit control over concurrency and backpressure
-- efficient binary serialization (Kryo)
-- strongly typed, interface-driven messaging
+It supports three communication patterns:
 
-Nimrod IPC is used in production trading systems but is published as a general-purpose library.
+- **Request/Response (RMI)** — strongly typed, interface-driven remote method invocation, with compile-time generated client proxies and server controllers. The caller invokes a method on a remote service and waits for its response.
+
+- **Fire-and-Forget (Many-to-One)** — one-way remote method invocation to a known receiving service. The caller waits for the RSocket send operation to complete, with detected transport failures propagated as exceptions, but does not wait for an application response. This supports a many-to-one messaging paradigm in which multiple clients send messages to a common service.
+
+- **Publish/Subscribe (One-to-Many)** — asynchronous event distribution to zero or more subscribers, with wildcard-based subscription filtering. Publishers are decoupled from individual subscribers and do not receive per-subscriber delivery acknowledgements.
+
+<br>Nimrod IPC is designed for systems requiring efficient binary serialization, configurable concurrency, and direct communication between JVM processes without an intermediary message broker.
+
+Originally developed for production trading systems, Nimrod IPC is published as a general-purpose library.
 
 ---
 
