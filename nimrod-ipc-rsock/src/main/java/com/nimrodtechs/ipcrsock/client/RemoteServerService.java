@@ -20,6 +20,8 @@ import reactor.util.retry.Retry;
 
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
@@ -87,16 +89,21 @@ public class RemoteServerService {
     private GenericObjectPool<RSocketRequester> getConnectPool(RemoteServerInfo remoteServerInfo) throws Exception {
         GenericObjectPoolConfig poolConfig = new GenericObjectPoolConfig();
         poolConfig.setMaxTotal(remoteServerInfo.getMaxConcurrentCalls());
+        poolConfig.setMaxIdle(poolConfig.getMaxTotal());
         poolConfig.setJmxEnabled(false);
         GenericObjectPool<RSocketRequester> pool = new GenericObjectPool<>(new PoolConnectionFactory(remoteServerInfo), poolConfig);
-        //Initialize pool now with 4 pooled objects
-        for (int i = 0; i < poolConfig.getMaxTotal(); i++) {
-            try {
-                RSocketRequester myObject = pool.borrowObject();
-                pool.returnObject(myObject);
-            } catch (Exception ex) {
-                log.error("Error during initialization of Remote Server connection to " + remoteServerInfo.getName() + " host:" + remoteServerInfo.getHost() + " port:" + remoteServerInfo.getPort());
-                throw ex;
+        // Hold all requesters until the configured pool size has been created.
+        List<RSocketRequester> requesters = new ArrayList<>();
+        try {
+            for (int i = 0; i < poolConfig.getMaxTotal(); i++) {
+                requesters.add(pool.borrowObject());
+            }
+        } catch (Exception ex) {
+            log.error("Error during initialization of Remote Server connection to " + remoteServerInfo.getName() + " host:" + remoteServerInfo.getHost() + " port:" + remoteServerInfo.getPort());
+            throw ex;
+        } finally {
+            for (RSocketRequester requester : requesters) {
+                pool.returnObject(requester);
             }
         }
         log.info("Initialized " + remoteServerInfo.getMaxConcurrentCalls() + " connections to server " + remoteServerInfo.getName() + ":" + remoteServerInfo.getHost() + ":" + remoteServerInfo.getPort());

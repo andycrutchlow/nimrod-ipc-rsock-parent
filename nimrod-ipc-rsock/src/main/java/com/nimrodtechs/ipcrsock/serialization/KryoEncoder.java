@@ -11,7 +11,6 @@ import org.springframework.util.MimeType;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 
@@ -39,8 +38,8 @@ public class KryoEncoder implements Encoder<Object> {
 
     /**
      * Reactive stream encoding (RSocket/WebFlux streaming).
-     * Uses ZERO-COPY wrapping via ByteBuffer.
-     * Resource lifecycle tied to subscriber termination.
+     * Copy each encoded value before returning its pooled output buffer.
+     * Downstream consumers may retain DataBuffers after the inner publisher terminates.
      */
     @Override
     public Flux<DataBuffer> encode(
@@ -51,8 +50,6 @@ public class KryoEncoder implements Encoder<Object> {
             Map<String, Object> hints
     ) {
 
-        final Class<?> resolved = elementType.resolve();
-
         return Flux.from(inputStream)
                 .concatMap(value ->
                         Mono.defer(() -> {
@@ -62,20 +59,12 @@ public class KryoEncoder implements Encoder<Object> {
                             try {
                                 Kryo kryo = ki.getKryo();
 
-                                kryo.writeObjectOrNull(ki.getOutput(), value, resolved);
+                                kryo.writeClassAndObject(ki.getOutput(), value);
                                 ki.getOutput().flush();
 
-                                ReusableByteArrayOutputStream out = ki.getOutputStream();
+                                DataBuffer buffer = bufferFactory.wrap(ki.getOutputStream().toByteArray());
 
-                                ByteBuffer bb = ByteBuffer.wrap(
-                                        out.buffer(),
-                                        0,
-                                        out.size()
-                                );
-
-                                DataBuffer buffer = bufferFactory.wrap(bb);
-
-                                // Release only after subscriber terminates
+                                // The emitted buffer owns its bytes, independently of the pooled Kryo state.
                                 return Mono.just(buffer)
                                         .doFinally(signal -> kryoCommon.release(ki));
 
@@ -107,11 +96,8 @@ public class KryoEncoder implements Encoder<Object> {
         try {
             Kryo kryo = ki.getKryo();
 
-            if (object == null) {
-                kryo.writeObject(ki.getOutput(), Kryo.NULL);
-            } else {
-                kryo.writeObjectOrNull(ki.getOutput(), object, object.getClass());
-            }
+            // Include the concrete root type: RMI callers commonly declare an interface (List).
+            kryo.writeClassAndObject(ki.getOutput(), object);
 
             ki.getOutput().flush();
 
@@ -136,11 +122,8 @@ public class KryoEncoder implements Encoder<Object> {
         try {
             Kryo kryo = ki.getKryo();
 
-            if (object == null) {
-                kryo.writeObject(ki.getOutput(), Kryo.NULL);
-            } else {
-                kryo.writeObjectOrNull(ki.getOutput(), object, object.getClass());
-            }
+            // Include the concrete root type: RMI callers commonly declare an interface (List).
+            kryo.writeClassAndObject(ki.getOutput(), object);
 
             ki.getOutput().flush();
 
