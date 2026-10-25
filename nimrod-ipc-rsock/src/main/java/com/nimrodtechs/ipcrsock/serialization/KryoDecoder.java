@@ -3,10 +3,12 @@ package com.nimrodtechs.ipcrsock.serialization;
 import org.reactivestreams.Publisher;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.codec.Decoder;
+import org.springframework.core.codec.DecodingException;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeType;
+import org.springframework.util.ClassUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -57,8 +59,7 @@ public class KryoDecoder implements Decoder<Object> {
             ki.getInput().setBuffer(bytes);
             ki.getInput().reset();
 
-            return ki.getKryo()
-                    .readObjectOrNull(ki.getInput(), targetType.resolve());
+            return readValue(ki, targetType.resolve());
 
         } finally {
             kryoCommon.release(ki);
@@ -95,9 +96,9 @@ public class KryoDecoder implements Decoder<Object> {
                                 ki.getInput().reset();
 
                                 Object result =
-                                        ki.getKryo().readObjectOrNull(ki.getInput(), resolved);
+                                        readValue(ki, resolved);
 
-                                return Mono.just(result)
+                                return Mono.justOrEmpty(result)
                                         .doFinally(signal -> kryoCommon.release(ki));
 
                             } catch (Throwable t) {
@@ -136,9 +137,9 @@ public class KryoDecoder implements Decoder<Object> {
                         ki.getInput().reset();
 
                         Object result =
-                                ki.getKryo().readObjectOrNull(ki.getInput(), resolved);
+                                readValue(ki, resolved);
 
-                        return Mono.just(result)
+                        return Mono.justOrEmpty(result)
                                 .doFinally(signal -> kryoCommon.release(ki));
 
                     } catch (Throwable t) {
@@ -151,6 +152,7 @@ public class KryoDecoder implements Decoder<Object> {
     /**
      * Utility helper
      */
+    @SuppressWarnings("unchecked")
     public <T> T deserialize(byte[] bytes, Class<T> type) {
 
         KryoInfo ki = kryoCommon.tryBorrow();
@@ -159,10 +161,21 @@ public class KryoDecoder implements Decoder<Object> {
             ki.getInput().setBuffer(bytes);
             ki.getInput().reset();
 
-            return ki.getKryo().readObjectOrNull(ki.getInput(), type);
+            return (T) readValue(ki, type);
 
         } finally {
             kryoCommon.release(ki);
         }
     }
+
+    /** Must match the encoder's class-and-object wire format on every codec entry point. */
+    private Object readValue(KryoInfo ki, Class<?> declaredType) {
+        Object value = ki.getKryo().readClassAndObject(ki.getInput());
+        if (value != null && declaredType != null && !ClassUtils.isAssignableValue(declaredType, value)) {
+            throw new DecodingException("Kryo root type " + value.getClass().getName()
+                    + " is not assignable to requested type " + declaredType.getName());
+        }
+        return value;
+    }
+
 }
